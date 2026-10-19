@@ -75,8 +75,6 @@ qboolean R_Init( void )
 		// Enable viewmodel ray-traced lighting
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.viewModel", "1" );
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.viewModelScale", "1.0" );
-		// Ensure 100% ray-traced primary visibility through TLAS
-		g_remix.SetConfigVariable( "rtx.native.pathtrace.primaryVisibility", "ray" );
 	}
 
 	// Ensure mouse centering in windowed mode and raw input for full 360-degree rotation

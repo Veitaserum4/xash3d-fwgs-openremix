@@ -73,6 +73,7 @@ static void R_Textures_CreateDefaultMaterial( void )
 	opaqueExt.roughnessConstant = 0.85f;
 	opaqueExt.metallicConstant  = 0.0f;
 	opaqueExt.opacityConstant   = 1.0f;
+	opaqueExt.alphaTestType     = 7; // ALWAYS (0 = NEVER would discard every texel)
 	opaqueExt.albedoConstant.x  = 1.0f;
 	opaqueExt.albedoConstant.y  = 1.0f;
 	opaqueExt.albedoConstant.z  = 1.0f;
@@ -243,6 +244,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	opaqueExt.roughnessConstant = 0.85f;
 	opaqueExt.metallicConstant  = 0.0f;
 	opaqueExt.opacityConstant   = 1.0f;
+	opaqueExt.alphaTestType     = 7; // ALWAYS (0 = NEVER would discard every texel)
 	opaqueExt.albedoConstant.x  = 1.0f;
 	opaqueExt.albedoConstant.y  = 1.0f;
 	opaqueExt.albedoConstant.z  = 1.0f;
