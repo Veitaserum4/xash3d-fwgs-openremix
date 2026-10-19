@@ -284,6 +284,19 @@ void R_SetupCamera( const ref_viewpass_t *rvp )
 				                       R_Remix_GetErrorString( err ), (int)err );
 			}
 		}
+
+		// Also configure viewmodel camera so OpenRemix applyViewModel() handles first-person weapons
+		remixapi_CameraInfoParameterizedEXT paramVMCamera = paramCamera;
+		paramVMCamera.fovYInDegrees = 70.0f;
+		paramVMCamera.nearPlane     = 0.1f;
+		paramVMCamera.farPlane      = 256.0f;
+
+		remixapi_CameraInfo vmCameraInfo = { 0 };
+		vmCameraInfo.sType = REMIXAPI_STRUCT_TYPE_CAMERA_INFO;
+		vmCameraInfo.pNext = &paramVMCamera;
+		vmCameraInfo.type  = REMIXAPI_CAMERA_TYPE_VIEW_MODEL;
+
+		g_remix.SetupCamera( &vmCameraInfo );
 	}
 }
 

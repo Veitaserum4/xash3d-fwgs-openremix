@@ -525,10 +525,18 @@ void R_BSP_DrawWorld( void )
 		}
 	};
 
+	remixapi_InstanceIdentityEXT identityExt;
+	memset( &identityExt, 0, sizeof( identityExt ) );
+	identityExt.sType          = REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT;
+	identityExt.pNext          = NULL;
+	identityExt.instanceId     = g_bspState.worldMeshHash ? g_bspState.worldMeshHash : 1ULL;
+	identityExt.classification = REMIXAPI_INSTANCE_STATIC_EXT;
+	identityExt.rasterVisible  = 1;
+
 	remixapi_InstanceInfo instance;
 	memset( &instance, 0, sizeof( instance ) );
 	instance.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
-	instance.pNext         = NULL;
+	instance.pNext         = &identityExt;
 	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL |
 	                         REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
 	instance.mesh          = g_bspState.worldMesh;
@@ -570,10 +578,20 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 		}
 	}
 
+	uint64_t entityInstanceId = R_HashString64( ent->model->name ) ^ ( (uint64_t)ent->index << 32 );
+
+	remixapi_InstanceIdentityEXT identityExt;
+	memset( &identityExt, 0, sizeof( identityExt ) );
+	identityExt.sType          = REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT;
+	identityExt.pNext          = NULL;
+	identityExt.instanceId     = entityInstanceId ? entityInstanceId : 2ULL;
+	identityExt.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT;
+	identityExt.rasterVisible  = 1;
+
 	remixapi_InstanceInfo instance;
 	memset( &instance, 0, sizeof( instance ) );
 	instance.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
-	instance.pNext         = NULL;
+	instance.pNext         = &identityExt;
 	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL |
 	                         REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
 	instance.mesh          = subMesh;

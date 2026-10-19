@@ -697,10 +697,18 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 		categoryFlags |= REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE;
 
 	// USD modding replacement hash extension
+	remixapi_InstanceIdentityEXT identityExt;
+	memset( &identityExt, 0, sizeof( identityExt ) );
+	identityExt.sType          = REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT;
+	identityExt.pNext          = NULL;
+	identityExt.instanceId     = geomHash;
+	identityExt.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT;
+	identityExt.rasterVisible  = 1;
+
 	remixapi_InstanceInfoReplacementHashEXT replaceExt;
 	memset( &replaceExt, 0, sizeof( replaceExt ) );
 	replaceExt.sType    = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_REPLACEMENT_HASH_EXT;
-	replaceExt.pNext    = NULL;
+	replaceExt.pNext    = &identityExt;
 	replaceExt.meshHash = modHash;
 
 	// Identity transform since vertices are already deformed in world coordinates
@@ -719,6 +727,7 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 	instanceInfo.categoryFlags = categoryFlags;
 	instanceInfo.mesh          = meshHandle;
 	instanceInfo.transform     = identityTransform;
+	instanceInfo.doubleSided   = 1;
 	if( g_remix.DrawInstance )
 	{
 		remixapi_ErrorCode err = g_remix.DrawInstance( &instanceInfo );
