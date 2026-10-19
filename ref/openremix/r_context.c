@@ -4,6 +4,8 @@
  */
 
 #include "r_local.h"
+#include "r_textures.h"
+#include "r_ui.h"
 
 // Cached engine globals
 ref_api_t          gEngfuncs;
@@ -184,12 +186,40 @@ static qboolean Mod_ProcessRenderData_Stub( model_t *mod, qboolean create, const
 	return true;
 }
 
-static intptr_t RefGetParm_Stub( int parm, int arg )
+static intptr_t RefGetParm_Hook( int parm, int arg )
 {
-	(void)arg;
-	if( parm == PARM_GL_CONTEXT_TYPE )
+	switch( parm )
+	{
+	case PARM_TEX_WIDTH:
+	case PARM_TEX_SRC_WIDTH:
+		if( arg > 0 && arg < MAX_REMIX_TEXTURES && g_remixTextures[arg].registered )
+			return (intptr_t)g_remixTextures[arg].width;
+		if( arg > 0 && arg < MAX_UI_TEXTURES && g_ui.textures[arg].registered )
+			return (intptr_t)g_ui.textures[arg].width;
+		return 0;
+
+	case PARM_TEX_HEIGHT:
+	case PARM_TEX_SRC_HEIGHT:
+		if( arg > 0 && arg < MAX_REMIX_TEXTURES && g_remixTextures[arg].registered )
+			return (intptr_t)g_remixTextures[arg].height;
+		if( arg > 0 && arg < MAX_UI_TEXTURES && g_ui.textures[arg].registered )
+			return (intptr_t)g_ui.textures[arg].height;
+		return 0;
+
+	case PARM_TEX_TEXNUM:
+		return (intptr_t)arg;
+
+	case PARM_TEX_FLAGS:
+		if( arg > 0 && arg < MAX_REMIX_TEXTURES && g_remixTextures[arg].registered )
+			return (intptr_t)g_remixTextures[arg].flags;
+		return 0;
+
+	case PARM_GL_CONTEXT_TYPE:
 		return CONTEXT_TYPE_SOFTWARE;
-	return 0;
+
+	default:
+		return 0;
+	}
 }
 
 static void R_GetDetailScaleForTexture_Stub( int texture, float *xScale, float *yScale )
@@ -219,10 +249,13 @@ static void R_OverrideTextureSourceSize_Stub( unsigned int texnum, unsigned int 
 	(void)srcHeight;
 }
 
-static void GL_Bind_Stub( int tmu, unsigned int texnum )
+static void GL_Bind_Hook( int tmu, unsigned int texnum )
 {
 	(void)tmu;
-	(void)texnum;
+	if( texnum > 0 && texnum < MAX_UI_TEXTURES && g_ui.textures[texnum].registered )
+		g_ui.currentTextureId = (remixapi_UITextureHandle)texnum;
+	else
+		g_ui.currentTextureId = 0;
 }
 
 static void GL_OrthoBounds_Stub( const float *mins, const float *maxs )
@@ -343,7 +376,7 @@ const ref_interface_t gReffuncs =
 	.CL_DrawTracers        = CL_DrawTracers,
 	.CL_DrawBeams          = CL_DrawBeams,
 
-	.RefGetParm            = RefGetParm_Stub,
+	.RefGetParm            = RefGetParm_Hook,
 
 	.R_GetDetailScaleForTexture = R_GetDetailScaleForTexture_Stub,
 	.R_SetDetailScaleForTexture = R_SetDetailScaleForTexture_Stub,
@@ -357,7 +390,7 @@ const ref_interface_t gReffuncs =
 	.R_OverrideTextureSourceSize = R_OverrideTextureSourceSize_Stub,
 
 	.GL_UpdateTexture      = GL_UpdateTexture_Hook,
-	.GL_Bind               = GL_Bind_Stub,
+	.GL_Bind               = GL_Bind_Hook,
 
 	.GL_RenderFrame        = GL_RenderFrame,
 	.GL_OrthoBounds        = GL_OrthoBounds_Stub,

@@ -226,6 +226,15 @@ static void R_UI_EmitQuad( float x0, float y0, float s0, float t0,
                            uint32_t color,
                            uint32_t flags )
 {
+	if( !isfinite( x0 ) || !isfinite( y0 ) || !isfinite( s0 ) || !isfinite( t0 ) ||
+	    !isfinite( x1 ) || !isfinite( y1 ) || !isfinite( s1 ) || !isfinite( t1 ) ||
+	    !isfinite( x2 ) || !isfinite( y2 ) || !isfinite( s2 ) || !isfinite( t2 ) ||
+	    !isfinite( x3 ) || !isfinite( y3 ) || !isfinite( s3 ) || !isfinite( t3 ) )
+		return;
+
+	if( textureId != 0 && ( (size_t)textureId >= MAX_UI_TEXTURES || !g_ui.textures[(size_t)textureId].registered ) )
+		textureId = 0;
+
 	if( g_ui.vertexCount + 4 > MAX_UI_VERTICES || g_ui.indexCount + 6 > MAX_UI_INDICES )
 		return;
 
@@ -307,7 +316,14 @@ static void R_UI_EmitQuad( float x0, float y0, float s0, float t0,
  */
 void R_UI_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, int texnum )
 {
-	remixapi_UITextureHandle textureId = ( texnum > 0 ) ? (remixapi_UITextureHandle)texnum : 0;
+	if( !isfinite( x ) || !isfinite( y ) || !isfinite( w ) || !isfinite( h ) ||
+	    !isfinite( s1 ) || !isfinite( t1 ) || !isfinite( s2 ) || !isfinite( t2 ) )
+		return;
+
+	remixapi_UITextureHandle textureId = 0;
+	if( texnum > 0 && texnum < MAX_UI_TEXTURES && g_ui.textures[texnum].registered )
+		textureId = (remixapi_UITextureHandle)texnum;
+
 	uint32_t flags = REMIXAPI_UI_NATIVE_LINEAR;
 
 	R_UI_EmitQuad(
@@ -326,6 +342,9 @@ void R_UI_DrawStretchPic( float x, float y, float w, float h, float s1, float t1
  */
 void R_UI_FillRGBA( int rendermode, float x, float y, float w, float h, byte r, byte g, byte b, byte a )
 {
+	if( !isfinite( x ) || !isfinite( y ) || !isfinite( w ) || !isfinite( h ) )
+		return;
+
 	uint32_t packedColor = ( (uint32_t)a << 24 ) | ( (uint32_t)b << 16 ) | ( (uint32_t)g << 8 ) | (uint32_t)r;
 	uint32_t flags = 0;
 
@@ -355,7 +374,10 @@ void R_UI_DrawPoly( const float *verts, int numverts, int texnum )
 	if( numverts < 3 || !verts )
 		return;
 
-	remixapi_UITextureHandle textureId = ( texnum > 0 ) ? (remixapi_UITextureHandle)texnum : 0;
+	remixapi_UITextureHandle textureId = 0;
+	if( texnum > 0 && texnum < MAX_UI_TEXTURES && g_ui.textures[texnum].registered )
+		textureId = (remixapi_UITextureHandle)texnum;
+
 	uint32_t flags = REMIXAPI_UI_NATIVE_LINEAR;
 
 	// Triangulate convex fan: (0, i, i+1)
@@ -453,7 +475,10 @@ void R_UI_TriEnd( void )
 	if( s_tri2D.vertexCount < 3 )
 		return;
 
-	remixapi_UITextureHandle textureId = g_ui.currentTextureId;
+	remixapi_UITextureHandle textureId = 0;
+	if( g_ui.currentTextureId > 0 && (size_t)g_ui.currentTextureId < MAX_UI_TEXTURES && g_ui.textures[(size_t)g_ui.currentTextureId].registered )
+		textureId = g_ui.currentTextureId;
+
 	uint32_t flags = REMIXAPI_UI_NATIVE_LINEAR;
 
 	if( s_tri2D.primitive == TRI_QUADS && s_tri2D.vertexCount >= 4 )
