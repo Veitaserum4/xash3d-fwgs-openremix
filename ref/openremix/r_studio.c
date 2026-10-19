@@ -719,10 +719,19 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 	instanceInfo.categoryFlags = categoryFlags;
 	instanceInfo.mesh          = meshHandle;
 	instanceInfo.transform     = identityTransform;
-	instanceInfo.doubleSided   = 1;
-
 	if( g_remix.DrawInstance )
-		g_remix.DrawInstance( &instanceInfo );
+	{
+		remixapi_ErrorCode err = g_remix.DrawInstance( &instanceInfo );
+		if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+		{
+			static int s_studioDrawErrors = 0;
+			if( ++s_studioDrawErrors <= 5 )
+			{
+				gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: DrawInstance for studio %s failed: %s (%d)\n",
+				                       modName, R_Remix_GetErrorString( err ), (int)err );
+			}
+		}
+	}
 }
 
 /*

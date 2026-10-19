@@ -268,6 +268,13 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 	meshInfo.surfaces_values = surfaceTriangles;
 	meshInfo.surfaces_count  = activeSurfaces;
 
+	uint32_t totalVerts = 0, totalIndices = 0;
+	for( int t = 0; t < numTextures; t++ )
+	{
+		totalVerts += buckets[t].numVerts;
+		totalIndices += buckets[t].numIndices;
+	}
+
 	remixapi_MeshHandle meshHandle = NULL;
 	if( g_remix.CreateMeshBatched )
 	{
@@ -276,6 +283,11 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 		{
 			gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: CreateMeshBatched failed with code %d\n", (int)err );
 			meshHandle = NULL;
+		}
+		else
+		{
+			gEngfuncs.Con_Printf( "^2ref_openremix: BLAS built for %s: %u surfaces, %u verts, %u tris^7\n",
+			                      mod->name, activeSurfaces, totalVerts, totalIndices / 3 );
 		}
 	}
 
@@ -458,7 +470,16 @@ void R_BSP_DrawWorld( void )
 	instance.transform     = identityTransform;
 	instance.doubleSided   = 1;
 
-	g_remix.DrawInstance( &instance );
+	remixapi_ErrorCode err = g_remix.DrawInstance( &instance );
+	if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		static int s_worldDrawErrors = 0;
+		if( ++s_worldDrawErrors <= 5 )
+		{
+			gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: DrawInstance for world failed: %s (%d)\n",
+			                       R_Remix_GetErrorString( err ), (int)err );
+		}
+	}
 }
 
 void R_BSP_DrawBrushEntity( cl_entity_t *ent )
@@ -493,7 +514,16 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	instance.transform     = transform;
 	instance.doubleSided   = 1;
 
-	g_remix.DrawInstance( &instance );
+	remixapi_ErrorCode err = g_remix.DrawInstance( &instance );
+	if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		static int s_brushDrawErrors = 0;
+		if( ++s_brushDrawErrors <= 5 )
+		{
+			gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: DrawInstance for brush %s failed: %s (%d)\n",
+			                       ent->model->name, R_Remix_GetErrorString( err ), (int)err );
+		}
+	}
 }
 
 void R_BSP_DrawEntities( void )

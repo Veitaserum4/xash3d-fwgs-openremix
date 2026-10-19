@@ -58,7 +58,11 @@ static void R_Textures_CreateDefaultMaterial( void )
 	texInfo.data      = whitePixels;
 	texInfo.dataSize  = sizeof( whitePixels );
 
-	g_remix.CreateTexture( &texInfo, &s_defaultTexture );
+	remixapi_ErrorCode tErr = g_remix.CreateTexture( &texInfo, &s_defaultTexture );
+	if( tErr != REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: Default CreateTexture failed: %u\n", (unsigned)tErr );
+	}
 
 	wchar_t hashStr[32];
 	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)texHash );
@@ -84,7 +88,11 @@ static void R_Textures_CreateDefaultMaterial( void )
 	matInfo.wrapModeU     = 1;
 	matInfo.wrapModeV     = 1;
 
-	g_remix.CreateMaterial( &matInfo, &s_defaultMaterial );
+	remixapi_ErrorCode mErr = g_remix.CreateMaterial( &matInfo, &s_defaultMaterial );
+	if( mErr != REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: Default CreateMaterial failed: %u\n", (unsigned)mErr );
+	}
 }
 
 void R_Textures_Init( void )

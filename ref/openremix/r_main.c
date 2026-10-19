@@ -75,6 +75,8 @@ qboolean R_Init( void )
 		// Enable viewmodel ray-traced lighting
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.viewModel", "1" );
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.viewModelScale", "1.0" );
+		// Ensure 100% ray-traced primary visibility through TLAS
+		g_remix.SetConfigVariable( "rtx.native.pathtrace.primaryVisibility", "ray" );
 	}
 
 	// Ensure mouse centering in windowed mode and raw input for full 360-degree rotation
@@ -154,10 +156,9 @@ void R_NewMap( void )
 		tr.worldmodel = gp_cl->models[1];
 	}
 
-	// Clear textures & materials from previous map
-	R_Textures_ClearMap();
-
 	// Teardown previous map geometry & build new static world + submodels
+	// Note: We do NOT clear textures here because Mod_LoadModel loads the map's textures
+	// before calling R_NewMap(). Clearing them here would destroy newly loaded textures.
 	R_BSP_NewMap( tr.worldmodel );
 	R_StudioNewMap();
 	R_Sprite_NewMap();
@@ -275,7 +276,16 @@ void R_SetupCamera( const ref_viewpass_t *rvp )
 
 	if( g_remix.SetupCamera )
 	{
-		g_remix.SetupCamera( &cameraInfo );
+		remixapi_ErrorCode err = g_remix.SetupCamera( &cameraInfo );
+		if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+		{
+			static int s_camErrors = 0;
+			if( ++s_camErrors <= 5 )
+			{
+				gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: SetupCamera failed: %s (%d)\n",
+				                       R_Remix_GetErrorString( err ), (int)err );
+			}
+		}
 	}
 }
 
