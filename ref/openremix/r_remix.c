@@ -335,32 +335,24 @@ void R_Remix_UpdateCursorClipping( void )
 		g_uiOpen = ( g_remix.GetUIState() != REMIXAPI_UI_STATE_NONE );
 	}
 
-	// If game window is not foreground or is minimized, release cursor
-	if( GetForegroundWindow() != g_gameHwnd || IsIconic( g_gameHwnd ) )
+	// 1. If OpenRemix UI is open, or window is not foreground or is minimized, release cursor
+	if( g_uiOpen || GetForegroundWindow() != g_gameHwnd || IsIconic( g_gameHwnd ) )
 	{
 		ClipCursor( NULL );
 		s_inClipping = false;
 		return;
 	}
 
-	// If OpenRemix UI is open, release cursor so player can click everywhere
-	if( g_uiOpen )
+	// 2. Check connection state (only clip during active gameplay, not in console/menus)
+	int connState = gEngfuncs.EngineGetParm ? gEngfuncs.EngineGetParm( PARM_CONNSTATE, 0 ) : 0;
+	if( connState != ca_active )
 	{
 		ClipCursor( NULL );
 		s_inClipping = false;
 		return;
 	}
 
-	// If Windows cursor is currently showing (e.g. in game menu or console), release cursor
-	CURSORINFO ci = { sizeof( ci ) };
-	if( GetCursorInfo( &ci ) && ( ci.flags & CURSOR_SHOWING ) )
-	{
-		ClipCursor( NULL );
-		s_inClipping = false;
-		return;
-	}
-
-	// Otherwise, in active gameplay: clip cursor to window client rectangle
+	// 3. Otherwise, in active gameplay: clip cursor to window client rectangle
 	RECT clientRect;
 	if( GetClientRect( g_gameHwnd, &clientRect ) )
 	{
@@ -420,7 +412,7 @@ static LRESULT CALLBACK R_Remix_WindowProcHook( HWND hwnd, UINT uMsg, WPARAM wPa
 		return 0;
 	}
 
-	// 2. Handle deactivation and focus loss - never call ClipCursor with non-NULL inside WindowProc
+	// 2. Handle deactivation and focus loss
 	if( uMsg == WM_ACTIVATE )
 	{
 		if( LOWORD( wParam ) == WA_INACTIVE )
@@ -433,42 +425,7 @@ static LRESULT CALLBACK R_Remix_WindowProcHook( HWND hwnd, UINT uMsg, WPARAM wPa
 		ClipCursor( NULL );
 	}
 
-	// 3. Message routing based on cached g_uiOpen flag (no mutex lock):
-	if( g_uiOpen )
-	{
-		// Pass input messages to OpenRemix's SDL3 window procedure
-		// so ImGui gets mouse clicks, mouse movement, and keyboard events
-		if( g_remixWndProc )
-		{
-			CallWindowProcW( g_remixWndProc, hwnd, uMsg, wParam, lParam );
-		}
-
-		// Forward system lifecycle messages to host so resizing/focus/close work properly
-		switch( uMsg )
-		{
-		case WM_CLOSE:
-		case WM_DESTROY:
-		case WM_SIZE:
-		case WM_SIZING:
-		case WM_ACTIVATE:
-		case WM_ACTIVATEAPP:
-		case WM_KILLFOCUS:
-		case WM_SETFOCUS:
-		case WM_PAINT:
-		case WM_ERASEBKGND:
-			if( g_hostWndProc )
-				return CallWindowProcW( g_hostWndProc, hwnd, uMsg, wParam, lParam );
-			break;
-		default:
-			break;
-		}
-
-		// Input messages (mouse move, clicks, typing) are consumed by the UI
-		return 0;
-	}
-
-	// When UI is closed:
-	// Route all messages directly to Xash3D's host window procedure
+	// Route messages to host window procedure
 	if( g_hostWndProc )
 	{
 		return CallWindowProcW( g_hostWndProc, hwnd, uMsg, wParam, lParam );
@@ -520,17 +477,12 @@ qboolean R_Remix_Startup( void *hwnd )
 #if defined(_WIN32)
 	g_gameHwnd = (HWND)hwnd;
 	g_hostWndProc = (WNDPROC)GetWindowLongPtr( g_gameHwnd, GWLP_WNDPROC );
-	// Temporarily set the window's WNDPROC to DefWindowProcW during Startup so
-	// OpenRemix captures DefWindowProcW as its previous proc.
-	SetWindowLongPtr( g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)DefWindowProcW );
 #endif
 
 	remixapi_ErrorCode status = g_remix.Startup( &startupInfo );
 
 #if defined(_WIN32)
-	// OpenRemix's SDL3 window subclassed the HWND. Capture its proc.
-	g_remixWndProc = (WNDPROC)GetWindowLongPtr( g_gameHwnd, GWLP_WNDPROC );
-	// Install our multiplexer hook
+	// Install our F12 toggle hook on the host window procedure
 	SetWindowLongPtr( g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)R_Remix_WindowProcHook );
 #endif
 
