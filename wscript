@@ -72,11 +72,12 @@ class Subproject:
 		return True
 
 class RefDll:
-	def __init__(self, name, default, key = None, all_renderers = True):
+	def __init__(self, name, default, key = None, all_renderers = True, aliases = None):
 		self.name = name
 		self.default = default
 		self.dest = key if key else name.upper()
 		self.all_renderers = all_renderers
+		self.aliases = aliases or []
 
 	def register_option(self, opt):
 		kw = dict()
@@ -87,13 +88,15 @@ class RefDll:
 			act = 'enable'
 			kw['action'] = 'store_true'
 
-		key = '--%s-%s' % (act, self.name)
+		keys = ['--%s-%s' % (act, self.name)]
+		for alias in self.aliases:
+			keys.append('--%s-%s' % (act, alias))
 
 		kw['dest'] = self.dest
 		kw['default'] = self.default
 		kw['help'] = '%s %s renderer [default: %%(default)s]' % (act, self.name)
 
-		opt.add_option(key, **kw)
+		opt.add_option(*keys, **kw)
 
 	def register_env(self, env, opts, force):
 		env[self.dest] = (force and self.all_renderers) or opts.__dict__[self.dest]
@@ -121,6 +124,7 @@ SUBDIRS = [
 	Subproject('ref/gl',                lambda x: x.env.CLIENT and (x.env.GL or x.env.NANOGL or x.env.GLWES or x.env.GL4ES or x.env.GLES3COMPAT)),
 	Subproject('ref/soft',              lambda x: x.env.CLIENT and x.env.SOFT),
 	Subproject('ref/null',              lambda x: x.env.CLIENT and x.env.NULL),
+	Subproject('ref/openremix',         lambda x: x.env.CLIENT and x.env.OPENREMIX),
 	Subproject('3rdparty/bzip2',        lambda x: x.env.CLIENT and not x.env.HAVE_SYSTEM_BZ2),
 	Subproject('3rdparty/mpg123',       lambda x: x.env.CLIENT and not x.env.HAVE_SYSTEM_MPG123),
 	Subproject('3rdparty/mbedtls'),
@@ -158,6 +162,7 @@ REFDLLS = [
 	RefDll('gl4es', False),
 	RefDll('gles3compat', False, 'GLES3COMPAT'),
 	RefDll('null', False),
+	RefDll('openremix', False, all_renderers = False, aliases = ['ref-openremix']),
 ]
 
 def options(opt):

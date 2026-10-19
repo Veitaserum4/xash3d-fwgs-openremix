@@ -1,0 +1,82 @@
+#! /usr/bin/env python
+# encoding: utf-8
+# ref_openremix build script for Xash3D FWGS
+
+import os
+from waflib import Logs
+
+top = '.'
+
+def options(opt):
+	grp = opt.add_option_group('ref_openremix options')
+	grp.add_option('--openremix-include', action='store', dest='OPENREMIX_INCLUDE', default=None,
+		help='path to OpenRemix public/include directory containing remix/remix_c.h')
+
+def configure(conf):
+	# 1. Architecture Check: OpenRemix requires 64-bit AMD64 pointer size
+	if conf.env.DEST_CPU != 'x86_64':
+		conf.fatal('ref_openremix requires a 64-bit target CPU (x86_64/amd64). Configure with -8 or --64bits.')
+
+	# 2. Platform Check: Windows is primary target
+	if conf.env.DEST_OS != 'win32':
+		Logs.warn('ref_openremix is primarily supported on Windows; non-Windows targets may require Vulkan swapchain extensions.')
+
+	# 3. Locate OpenRemix include path
+	openremix_inc = conf.options.OPENREMIX_INCLUDE or os.environ.get('OPENREMIX_INCLUDE')
+	candidates = [
+		openremix_inc,
+		# Standard development worktree location:
+		'c:/Users/Jacob/Desktop/UnityRTX/OpenRemix/public/include',
+		# Relative from workspace root:
+		os.path.abspath(os.path.join(conf.path.abspath(), '../../../../UnityRTX/OpenRemix/public/include')),
+		os.path.abspath(os.path.join(conf.path.abspath(), '../../../UnityRTX/OpenRemix/public/include')),
+		os.path.abspath(os.path.join(conf.path.abspath(), '../../OpenRemix/public/include')),
+	]
+
+	found_inc = None
+	for cand in candidates:
+		if cand and os.path.isfile(os.path.join(cand, 'remix', 'remix_c.h')):
+			found_inc = os.path.abspath(cand)
+			break
+
+	if not found_inc:
+		conf.fatal('Could not locate OpenRemix public/include directory containing remix/remix_c.h. Specify with --openremix-include=<path>')
+
+	conf.env.OPENREMIX_INCLUDE = found_inc
+	conf.msg('Checking for OpenRemix headers', found_inc)
+
+def build(bld):
+	# Dynamically collect all available C sources in ref/openremix/
+	source = bld.path.ant_glob('*.c')
+
+	# Include directories: local ref/openremix and OpenRemix public/include
+	includes = ['.', bld.env.OPENREMIX_INCLUDE]
+
+	# Build dependencies:
+	# - engine_includes: provides engine headers (ref_api.h, com_model.h, etc.)
+	# - sdk_includes: provides common, pm_shared, engine paths
+	# - public: libpublic static library (mathlib, string helpers, matrix functions)
+	# - werror: strict compilation flags
+	# - yy_thunks: Windows CRT compatibility thunks
+	# - USER32, GDI32: Win32 HWND presentation and window sizing
+	# - M: math library
+	libs = [
+		'public',
+		'engine_includes',
+		'sdk_includes',
+		'werror',
+		'yy_thunks',
+		'USER32',
+		'GDI32',
+		'M'
+	]
+
+	bld.shlib(
+		source       = source,
+		target       = 'ref_openremix',
+		includes     = includes,
+		defines      = ['REF_DLL=1', 'REF_OPENREMIX=1'],
+		features     = 'format',
+		use          = libs,
+		install_path = bld.env.LIBDIR
+	)

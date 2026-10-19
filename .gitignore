@@ -375,3 +375,6 @@ GEMINI.md
 .continue/
 .codeium/
 .github/copilot-instructions.md
+.agents/
+__pycache__/
+*.pyc
