@@ -76,9 +76,9 @@ void R_Lights_Init( void )
 		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
 		rt_light_range     = gEngfuncs.Cvar_Get( "rt_light_range", "0", FCVAR_ARCHIVE, "Local light cutoff range (0 = unlimited physical falloff)" );
 		rt_emis            = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
-		rt_fog             = gEngfuncs.Cvar_Get( "rt_fog", "1", FCVAR_ARCHIVE, "Enable OpenRemix path-traced volumetric fog" );
-		rt_fog_distance    = gEngfuncs.Cvar_Get( "rt_fog_distance", "80.0", FCVAR_ARCHIVE, "Volumetric fog sight distance in meters" );
-		rt_fog_scattering  = gEngfuncs.Cvar_Get( "rt_fog_scattering", "1.5", FCVAR_ARCHIVE, "Volumetric fog light scattering multiplier" );
+		rt_fog             = gEngfuncs.Cvar_Get( "rt_fog", "0", FCVAR_ARCHIVE, "Enable OpenRemix path-traced volumetric fog" );
+		rt_fog_distance    = gEngfuncs.Cvar_Get( "rt_fog_distance", "500.0", FCVAR_ARCHIVE, "Volumetric fog sight distance in meters" );
+		rt_fog_scattering  = gEngfuncs.Cvar_Get( "rt_fog_scattering", "0.3", FCVAR_ARCHIVE, "Volumetric fog light scattering multiplier" );
 
 		// Register client compatibility variables so game client does not warn each frame
 		_rt_labcoat        = gEngfuncs.Cvar_Get( "_rt_labcoat", "0", 0, "Internal labcoat player model state" );
