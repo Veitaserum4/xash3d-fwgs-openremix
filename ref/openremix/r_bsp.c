@@ -50,6 +50,48 @@ static void R_BSP_GetEdgePosition( const model_t *mod, const msurface_t *fa, int
 }
 
 //
+// Collinear Point Elimination for BSP Convex Polygons
+//
+static int R_BSP_EliminateCollinear( int numVerts, vec3_t *polyPositions )
+{
+	int lnum = numVerts;
+	for( int i = 0; i < lnum && lnum >= 3; i++ )
+	{
+		vec3_t v1, v2;
+		const float *prev = polyPositions[( i + lnum - 1 ) % lnum];
+		const float *curr = polyPositions[i];
+		const float *next = polyPositions[( i + 1 ) % lnum];
+
+		VectorSubtract( curr, prev, v1 );
+		VectorSubtract( next, prev, v2 );
+
+		float l1 = VectorLength( v1 );
+		float l2 = VectorLength( v2 );
+
+		if( l1 > 1e-4f && l2 > 1e-4f )
+		{
+			float inv1 = 1.0f / l1;
+			float inv2 = 1.0f / l2;
+			VectorScale( v1, inv1, v1 );
+			VectorScale( v2, inv2, v2 );
+
+			if( ( fabsf( v1[0] - v2[0] ) <= 0.001f ) &&
+			    ( fabsf( v1[1] - v2[1] ) <= 0.001f ) &&
+			    ( fabsf( v1[2] - v2[2] ) <= 0.001f ) )
+			{
+				for( int j = i + 1; j < lnum; j++ )
+				{
+					VectorCopy( polyPositions[j], polyPositions[j - 1] );
+				}
+				lnum--;
+				i--;
+			}
+		}
+	}
+	return lnum;
+}
+
+//
 // Texture UV Calculation
 //
 static void R_BSP_GetTextureCoords( const vec3_t pos, const msurface_t *surf, float *out_u, float *out_v )
@@ -189,6 +231,19 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 			R_BSP_GetEdgePosition( mod, surf, i, polyPositions[i] );
 		}
 
+		// Eliminate collinear T-junction vertices to prevent zero-area degenerate triangles
+		numVerts = R_BSP_EliminateCollinear( numVerts, polyPositions );
+		if( numVerts < 3 )
+			continue;
+
+		// Compute geometric normal to align fan winding with outward face normal
+		vec3_t e1, e2, geomNormal;
+		VectorSubtract( polyPositions[1], polyPositions[0], e1 );
+		VectorSubtract( polyPositions[2], polyPositions[0], e2 );
+		CrossProduct( e1, e2, geomNormal );
+
+		qboolean reverseWinding = ( DotProduct( geomNormal, faceNormal ) < 0.0f );
+
 		// Base vertex offset in current bucket
 		uint32_t baseVertex = b->numVerts;
 
@@ -211,12 +266,21 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 			R_BSP_AppendVertex( b, &v );
 		}
 
-		// Triangle fan indices: GoldSrc surfedges are wound counter-clockwise around the face normal
+		// Triangle fan indices: wound counter-clockwise matching outward face normal
 		for( int k = 0; k < numVerts - 2; k++ )
 		{
-			R_BSP_AppendIndex( b, baseVertex + 0 );
-			R_BSP_AppendIndex( b, baseVertex + k + 1 );
-			R_BSP_AppendIndex( b, baseVertex + k + 2 );
+			if( !reverseWinding )
+			{
+				R_BSP_AppendIndex( b, baseVertex + 0 );
+				R_BSP_AppendIndex( b, baseVertex + k + 1 );
+				R_BSP_AppendIndex( b, baseVertex + k + 2 );
+			}
+			else
+			{
+				R_BSP_AppendIndex( b, baseVertex + 0 );
+				R_BSP_AppendIndex( b, baseVertex + k + 2 );
+				R_BSP_AppendIndex( b, baseVertex + k + 1 );
+			}
 		}
 	}
 
@@ -465,7 +529,8 @@ void R_BSP_DrawWorld( void )
 	memset( &instance, 0, sizeof( instance ) );
 	instance.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
 	instance.pNext         = NULL;
-	instance.categoryFlags = 0;
+	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL |
+	                         REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
 	instance.mesh          = g_bspState.worldMesh;
 	instance.transform     = identityTransform;
 	instance.doubleSided   = 1;
@@ -509,7 +574,8 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	memset( &instance, 0, sizeof( instance ) );
 	instance.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
 	instance.pNext         = NULL;
-	instance.categoryFlags = 0;
+	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL |
+	                         REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
 	instance.mesh          = subMesh;
 	instance.transform     = transform;
 	instance.doubleSided   = 1;

@@ -149,16 +149,61 @@ void R_Textures_Shutdown( void )
 	}
 }
 
+static void R_Textures_GetBaseName( const char *src, char *dst, size_t dstSize )
+{
+	if( !src || !*src )
+	{
+		dst[0] = '\0';
+		return;
+	}
+
+	const char *colon = strrchr( src, ':' );
+	const char *slash = strrchr( src, '/' );
+	const char *backslash = strrchr( src, '\\' );
+
+	const char *start = src;
+	if( colon && colon + 1 > start ) start = colon + 1;
+	if( slash && slash + 1 > start ) start = slash + 1;
+	if( backslash && backslash + 1 > start ) start = backslash + 1;
+
+	Q_strncpy( dst, start, dstSize );
+
+	char *dot = strrchr( dst, '.' );
+	if( dot )
+		*dot = '\0';
+}
+
 int R_Textures_Find( const char *name )
 {
 	if( !name || !*name )
 		return 0;
 
+	// 1. Exact match
 	for( int i = 1; i < MAX_REMIX_TEXTURES; i++ )
 	{
 		if( g_remixTextures[i].registered && !Q_stricmp( g_remixTextures[i].name, name ) )
 			return i;
 	}
+
+	// 2. Base name match (e.g. matching "c2a4e_w1b" against "#maps/c1a0.bsp:c2a4e_w1b.mip")
+	char baseSearch[64];
+	R_Textures_GetBaseName( name, baseSearch, sizeof( baseSearch ) );
+
+	if( baseSearch[0] != '\0' )
+	{
+		for( int i = 1; i < MAX_REMIX_TEXTURES; i++ )
+		{
+			if( !g_remixTextures[i].registered )
+				continue;
+
+			char baseReg[64];
+			R_Textures_GetBaseName( g_remixTextures[i].name, baseReg, sizeof( baseReg ) );
+
+			if( !Q_stricmp( baseReg, baseSearch ) )
+				return i;
+		}
+	}
+
 	return 0;
 }
 
@@ -196,14 +241,17 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	if( s_nextTexNum >= MAX_REMIX_TEXTURES )
 		s_nextTexNum = 1;
 
+	char baseName[64];
+	R_Textures_GetBaseName( name, baseName, sizeof( baseName ) );
+
 	remix_texture_t *entry = &g_remixTextures[texnum];
 	Q_strncpy( entry->name, name, sizeof( entry->name ) );
 	entry->width         = width;
 	entry->height        = height;
 	entry->flags         = flags;
-	entry->isCutout      = ( name[0] == '{' );
-	entry->isWater       = ( name[0] == '!' || name[0] == '*' );
-	entry->isSky         = ( !Q_strnicmp( name, "sky", 3 ) || !Q_strnicmp( name, "scrollsky", 9 ) );
+	entry->isCutout      = ( baseName[0] == '{' );
+	entry->isWater       = ( baseName[0] == '!' || baseName[0] == '*' );
+	entry->isSky         = ( !Q_strnicmp( baseName, "sky", 3 ) || !Q_strnicmp( baseName, "scrollsky", 9 ) );
 	entry->registered    = true;
 
 	// 1. Create OpenRemix 3D Texture
@@ -481,7 +529,7 @@ remixapi_MaterialHandle R_Textures_GetOrCreateForBSP( texture_t *tx, const model
 			return g_remixTextures[tx->gl_texturenum].matHandle;
 	}
 
-	// 2. Search by name in registry
+	// 2. Search by name or base name in registry
 	int existing = R_Textures_Find( tx->name );
 	if( existing > 0 && g_remixTextures[existing].matHandle )
 	{
@@ -489,7 +537,20 @@ remixapi_MaterialHandle R_Textures_GetOrCreateForBSP( texture_t *tx, const model
 		return g_remixTextures[existing].matHandle;
 	}
 
-	// 3. Try to load from disk / WAD via engine
+	// 3. Try searching with map name prefix e.g. #maps/<map>.bsp:<name>.mip
+	if( mod && mod->name )
+	{
+		char mapTexName[128];
+		Q_snprintf( mapTexName, sizeof( mapTexName ), "#%s:%s.mip", mod->name, tx->name );
+		existing = R_Textures_Find( mapTexName );
+		if( existing > 0 && g_remixTextures[existing].matHandle )
+		{
+			tx->gl_texturenum = existing;
+			return g_remixTextures[existing].matHandle;
+		}
+	}
+
+	// 4. Try to load from disk / WAD via engine
 	if( gEngfuncs.FS_LoadImage )
 	{
 		rgbdata_t *pic = gEngfuncs.FS_LoadImage( tx->name, NULL, 0 );
