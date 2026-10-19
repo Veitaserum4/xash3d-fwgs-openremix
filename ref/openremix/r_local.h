@@ -139,6 +139,7 @@ static inline cl_entity_t *CL_GetEntityByIndex( int index )
 
 // Subsystem Headers
 #include "r_remix.h"
+#include "r_textures.h"
 #include "r_bsp.h"
 #include "r_studio.h"
 #include "r_ui.h"

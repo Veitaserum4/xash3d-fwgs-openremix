@@ -8,7 +8,6 @@
 #include "r_ui.h"
 
 ui_state_t g_ui;
-static int s_nextTexNum = 1;
 
 // Internal 2D TriAPI accumulator
 static struct
@@ -32,7 +31,6 @@ void R_UI_Init( void )
 	g_ui.currentTextureId = 0;          // Default white texture
 	g_ui.currentFlags     = REMIXAPI_UI_NATIVE_LINEAR;
 	g_ui.initialized      = true;
-	s_nextTexNum          = 1;
 
 	gEngfuncs.Con_DPrintf( "ref_openremix: 2D UI Compositor initialized\n" );
 }
@@ -58,7 +56,6 @@ void R_UI_Shutdown( void )
 	}
 
 	memset( &g_ui, 0, sizeof( g_ui ) );
-	s_nextTexNum = 1;
 	gEngfuncs.Con_DPrintf( "ref_openremix: 2D UI Compositor shutdown complete\n" );
 }
 
@@ -216,100 +213,6 @@ qboolean R_UI_GetTextureDimensions( int texnum, int *width, int *height )
 	if( width )  *width  = (int)g_ui.textures[texnum].width;
 	if( height ) *height = (int)g_ui.textures[texnum].height;
 	return true;
-}
-
-/*
- * GL_CreateTexture_Hook - Creates texture and registers with OpenRemix UI
- */
-int GL_CreateTexture_Hook( const char *name, int width, int height, const void *buffer, texFlags_t flags )
-{
-	(void)flags;
-	if( width <= 0 || height <= 0 )
-		return 0;
-
-	int texnum = s_nextTexNum++;
-	if( s_nextTexNum >= MAX_UI_TEXTURES )
-		s_nextTexNum = 1;
-
-	if( buffer )
-	{
-		R_UI_RegisterTexture( texnum, name, width, height, buffer, REMIXAPI_FORMAT_R8G8B8A8_UNORM );
-	}
-	else
-	{
-		ui_texture_entry_t *entry = &g_ui.textures[texnum];
-		entry->registered = false;
-		entry->width      = (uint32_t)width;
-		entry->height     = (uint32_t)height;
-		entry->format     = REMIXAPI_FORMAT_R8G8B8A8_UNORM;
-		if( name )
-			Q_strncpy( entry->name, name, sizeof( entry->name ) );
-	}
-
-	return texnum;
-}
-
-/*
- * GL_LoadTextureFromBuffer_Hook - Creates texture from rgbdata_t and registers with OpenRemix UI
- */
-int GL_LoadTextureFromBuffer_Hook( const char *name, rgbdata_t *pic, texFlags_t flags, qboolean update )
-{
-	(void)flags;
-	(void)update;
-	if( !pic || pic->width <= 0 || pic->height <= 0 || !pic->buffer )
-		return 0;
-
-	int texnum = s_nextTexNum++;
-	if( s_nextTexNum >= MAX_UI_TEXTURES )
-		s_nextTexNum = 1;
-
-	remixapi_Format fmt = ( pic->type == PF_BGRA_32 ) ? REMIXAPI_FORMAT_B8G8R8A8_UNORM : REMIXAPI_FORMAT_R8G8B8A8_UNORM;
-	R_UI_RegisterTexture( texnum, name, pic->width, pic->height, pic->buffer, fmt );
-
-	return texnum;
-}
-
-/*
- * GL_UpdateTexture_Hook - Updates texture subregion
- */
-void GL_UpdateTexture_Hook( int texnum, int cols, int rows, int width, int height, const byte *buffer, pixformat_t fmt )
-{
-	remixapi_Format rfmt = ( fmt == PF_BGRA_32 ) ? REMIXAPI_FORMAT_B8G8R8A8_UNORM : REMIXAPI_FORMAT_R8G8B8A8_UNORM;
-	R_UI_UpdateTextureRegion( texnum, cols, rows, width, height, buffer, rfmt, width * 4 );
-}
-
-/*
- * GL_FreeTexture_Hook - Frees texture
- */
-void GL_FreeTexture_Hook( unsigned int texnum )
-{
-	R_UI_FreeTexture( (int)texnum );
-}
-
-/*
- * GL_FindTexture_Hook - Search registered textures by name
- */
-int GL_FindTexture_Hook( const char *name )
-{
-	if( !name || !*name )
-		return 0;
-
-	for( int i = 1; i < MAX_UI_TEXTURES; i++ )
-	{
-		if( g_ui.textures[i].registered && !Q_stricmp( g_ui.textures[i].name, name ) )
-			return i;
-	}
-	return 0;
-}
-
-/*
- * GL_TextureName_Hook - Retrieve name of registered texture
- */
-const char *GL_TextureName_Hook( unsigned int texnum )
-{
-	if( texnum > 0 && texnum < MAX_UI_TEXTURES && g_ui.textures[texnum].registered )
-		return g_ui.textures[texnum].name;
-	return NULL;
 }
 
 /*

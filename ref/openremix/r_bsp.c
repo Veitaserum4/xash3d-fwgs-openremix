@@ -189,14 +189,6 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 			R_BSP_GetEdgePosition( mod, surf, i, polyPositions[i] );
 		}
 
-		// Check winding orientation against faceNormal
-		vec3_t e1, e2, geomNormal;
-		VectorSubtract( polyPositions[1], polyPositions[0], e1 );
-		VectorSubtract( polyPositions[2], polyPositions[0], e2 );
-		CrossProduct( e1, e2, geomNormal );
-
-		qboolean reverseWinding = ( DotProduct( geomNormal, faceNormal ) < 0.0f );
-
 		// Base vertex offset in current bucket
 		uint32_t baseVertex = b->numVerts;
 
@@ -219,21 +211,12 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 			R_BSP_AppendVertex( b, &v );
 		}
 
-		// Triangle fan indices
+		// Triangle fan indices: GoldSrc surfedges are wound counter-clockwise around the face normal
 		for( int k = 0; k < numVerts - 2; k++ )
 		{
-			if( !reverseWinding )
-			{
-				R_BSP_AppendIndex( b, baseVertex + 0 );
-				R_BSP_AppendIndex( b, baseVertex + k + 1 );
-				R_BSP_AppendIndex( b, baseVertex + k + 2 );
-			}
-			else
-			{
-				R_BSP_AppendIndex( b, baseVertex + 0 );
-				R_BSP_AppendIndex( b, baseVertex + k + 2 );
-				R_BSP_AppendIndex( b, baseVertex + k + 1 );
-			}
+			R_BSP_AppendIndex( b, baseVertex + 0 );
+			R_BSP_AppendIndex( b, baseVertex + k + 1 );
+			R_BSP_AppendIndex( b, baseVertex + k + 2 );
 		}
 	}
 
@@ -273,7 +256,7 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 		st->indices_values    = buckets[t].indices;
 		st->indices_count     = buckets[t].numIndices;
 		st->skinning_hasvalue = 0;
-		st->material          = NULL; // Material handle attached via r_material in M5
+		st->material          = R_Textures_GetOrCreateForBSP( buckets[t].texture, mod );
 	}
 
 	// Build master MeshInfo
@@ -473,7 +456,7 @@ void R_BSP_DrawWorld( void )
 	instance.categoryFlags = 0;
 	instance.mesh          = g_bspState.worldMesh;
 	instance.transform     = identityTransform;
-	instance.doubleSided   = 0;
+	instance.doubleSided   = 1;
 
 	g_remix.DrawInstance( &instance );
 }
@@ -508,7 +491,7 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	instance.categoryFlags = 0;
 	instance.mesh          = subMesh;
 	instance.transform     = transform;
-	instance.doubleSided   = 0;
+	instance.doubleSided   = 1;
 
 	g_remix.DrawInstance( &instance );
 }

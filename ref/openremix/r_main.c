@@ -101,6 +101,7 @@ qboolean R_Init( void )
 	tr.elights          = (dlight_t *)ENGINE_GET_PARM( PARM_GET_ELIGHTS_PTR );
 
 	// 7. Initialize rendering subsystems
+	R_Textures_Init();
 	R_BSP_Init();
 	R_StudioInit();
 	R_UI_Init();
@@ -127,6 +128,7 @@ void R_Shutdown( void )
 	R_UI_Shutdown();
 	R_StudioShutdown();
 	R_BSP_Shutdown();
+	R_Textures_Shutdown();
 
 	// Shutdown Remix renderer
 	R_Remix_Shutdown();
@@ -151,6 +153,9 @@ void R_NewMap( void )
 	{
 		tr.worldmodel = gp_cl->models[1];
 	}
+
+	// Clear textures & materials from previous map
+	R_Textures_ClearMap();
 
 	// Teardown previous map geometry & build new static world + submodels
 	R_BSP_NewMap( tr.worldmodel );

@@ -650,7 +650,7 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 	surface.indices_values    = g_scratchIndices;
 	surface.indices_count     = indexCount;
 	surface.skinning_hasvalue = 0;
-	surface.material          = NULL;
+	surface.material          = R_Textures_GetOrCreateForStudio( ptexture, m_pStudioHeader );
 
 	// Extensions for in-place GPU BLAS update and motion vectors
 	remixapi_MeshInfoMotionEXT motionExt;
@@ -719,7 +719,7 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 	instanceInfo.categoryFlags = categoryFlags;
 	instanceInfo.mesh          = meshHandle;
 	instanceInfo.transform     = identityTransform;
-	instanceInfo.doubleSided   = 0;
+	instanceInfo.doubleSided   = 1;
 
 	if( g_remix.DrawInstance )
 		g_remix.DrawInstance( &instanceInfo );

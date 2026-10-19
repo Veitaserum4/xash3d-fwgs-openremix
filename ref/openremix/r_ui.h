@@ -63,13 +63,6 @@ void     R_UI_UpdateTextureRegion( int texnum, int x, int y, int width, int heig
 void     R_UI_FreeTexture( int texnum );
 qboolean R_UI_GetTextureDimensions( int texnum, int *width, int *height );
 
-int         GL_CreateTexture_Hook( const char *name, int width, int height, const void *buffer, texFlags_t flags );
-int         GL_FindTexture_Hook( const char *name );
-const char *GL_TextureName_Hook( unsigned int texnum );
-int         GL_LoadTextureFromBuffer_Hook( const char *name, rgbdata_t *pic, texFlags_t flags, qboolean update );
-void        GL_UpdateTexture_Hook( int texnum, int cols, int rows, int width, int height, const byte *buffer, pixformat_t fmt );
-void        GL_FreeTexture_Hook( unsigned int texnum );
-
 // Engine Callback Implementations
 void     R_UI_Set2DMode( qboolean enable );
 void     R_UI_Set2DOffset( float x, float y );

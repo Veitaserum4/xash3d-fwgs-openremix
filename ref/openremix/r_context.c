@@ -184,12 +184,6 @@ static qboolean Mod_ProcessRenderData_Stub( model_t *mod, qboolean create, const
 	return true;
 }
 
-static void Mod_StudioLoadTextures_Stub( model_t *mod, void *data )
-{
-	(void)mod;
-	(void)data;
-}
-
 static intptr_t RefGetParm_Stub( int parm, int arg )
 {
 	(void)arg;
@@ -216,15 +210,6 @@ static const byte *GL_TextureData_Stub( unsigned int texnum )
 {
 	(void)texnum;
 	return NULL;
-}
-
-static int GL_LoadTexture_Stub( const char *name, const byte *buf, size_t size, int flags )
-{
-	(void)name;
-	(void)buf;
-	(void)size;
-	(void)flags;
-	return 0;
 }
 
 static void R_OverrideTextureSourceSize_Stub( unsigned int texnum, unsigned int srcWidth, unsigned int srcHeight )
@@ -352,7 +337,7 @@ const ref_interface_t gReffuncs =
 	.CL_RunLightStyles     = CL_RunLightStyles_Stub,
 
 	.Mod_ProcessRenderData  = Mod_ProcessRenderData_Stub,
-	.Mod_StudioLoadTextures = Mod_StudioLoadTextures_Stub,
+	.Mod_StudioLoadTextures = Mod_StudioLoadTextures_Hook,
 
 	.CL_DrawParticles      = CL_DrawParticles,
 	.CL_DrawTracers        = CL_DrawTracers,
@@ -367,7 +352,7 @@ const ref_interface_t gReffuncs =
 	.GL_FindTexture        = GL_FindTexture_Hook,
 	.GL_TextureName        = GL_TextureName_Hook,
 	.GL_TextureData        = GL_TextureData_Stub,
-	.GL_LoadTexture        = GL_LoadTexture_Stub,
+	.GL_LoadTexture        = GL_LoadTexture_Hook,
 	.GL_FreeTexture        = GL_FreeTexture_Hook,
 	.R_OverrideTextureSourceSize = R_OverrideTextureSourceSize_Stub,
 
