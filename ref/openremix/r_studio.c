@@ -665,7 +665,7 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 	updateExt.pNext   = &motionExt;
 	updateExt.enabled = 1;
 
-	int entIndex = ( RI.currententity ) ? RI.currententity->index : 0;
+	int entIndex = ( RI.currententity ) ? ( RI.currententity->index ? RI.currententity->index : (int)( ( (uintptr_t)RI.currententity >> 4 ) & 0x7FFF ) ) : 0;
 	const char *modName = ( RI.currentmodel ) ? RI.currentmodel->name : "studio";
 	uint64_t geomHash = R_StudioMakeGeometryHash( entIndex, bodypartIdx, submodelIdx, meshIdx );
 	uint64_t modHash  = R_StudioMakeReplacementHash( modName, bodypartIdx, submodelIdx, meshIdx );

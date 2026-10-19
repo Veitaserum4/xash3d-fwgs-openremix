@@ -442,7 +442,18 @@ void R_RenderScene( void )
 	// Draw static world mesh
 	R_BSP_DrawWorld();
 
-	// Draw moving brush entities (doors, triggers, platforms)
+	// Store efrags for static and fragmented entities in the world (doors, func_wall grates, etc.)
+	if( tr.worldmodel && tr.worldmodel->leafs && gEngfuncs.R_StoreEfrags )
+	{
+		for( int i = 0; i <= tr.worldmodel->numleafs; i++ )
+		{
+			mleaf_t *pleaf = &tr.worldmodel->leafs[i];
+			if( pleaf->efrags )
+				gEngfuncs.R_StoreEfrags( &pleaf->efrags, (int)tr.framecount );
+		}
+	}
+
+	// Draw moving and static brush entities (doors, triggers, platforms, grates)
 	R_BSP_DrawEntities();
 
 	// Draw studio models and sprites queued for this frame

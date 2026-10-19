@@ -399,9 +399,12 @@ void R_BSP_Shutdown( void )
 	R_BSP_Teardown();
 }
 
+static int s_brushLogCount = 0;
+
 void R_BSP_NewMap( model_t *worldmodel )
 {
 	R_BSP_Teardown();
+	s_brushLogCount = 0;
 
 	if( !worldmodel )
 		return;
@@ -520,8 +523,15 @@ qboolean R_BSP_AddEntity( cl_entity_t *clent, int type )
 	if( FBitSet( clent->curstate.effects, EF_NODRAW ) )
 		return false;
 
-	if( clent->curstate.rendermode != kRenderNormal && CL_FxBlend( clent ) <= 0 )
-		return true; // invisible, consumed
+	// Prevent duplicate entity additions within the same frame
+	if( clent->visframe == (int)tr.framecount )
+		return true; // Already processed for this frame
+	clent->visframe = (int)tr.framecount;
+
+	// Do not cull brush models based on CL_FxBlend; in Half-Life, translucent/cutout
+	// brushes (such as floor grates and glass) often have renderamt set to 0.
+	if( clent->model->type != mod_brush && clent->curstate.rendermode != kRenderNormal && CL_FxBlend( clent ) <= 0 )
+		return true; // invisible studio/sprite entity, consumed
 
 	if( clent->curstate.rendermode == kRenderNormal )
 	{
@@ -618,13 +628,26 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 		}
 	}
 
-	uint64_t entityInstanceId = R_HashString64( ent->model->name ) ^ ( (uint64_t)ent->index << 32 );
+	uint64_t entityInstanceId = R_HashString64( ent->model->name ) ^
+	                            ( ( (uint64_t)(uintptr_t)ent ) << 16 ) ^
+	                            ( ( (uint64_t)ent->index ) << 48 );
+	if( !entityInstanceId )
+		entityInstanceId = 0x8000000000000000ULL | (uint64_t)(uintptr_t)ent;
+
+	if( s_brushLogCount < 25 )
+	{
+		s_brushLogCount++;
+		gEngfuncs.Con_Reportf( "^2ref_openremix: Drawing brush %s (ent=%p, idx=%d, org=[%.1f, %.1f, %.1f], rendermode=%d)^7\n",
+		                       ent->model->name, (void *)ent, ent->index,
+		                       ent->origin[0], ent->origin[1], ent->origin[2],
+		                       ent->curstate.rendermode );
+	}
 
 	remixapi_InstanceIdentityEXT identityExt;
 	memset( &identityExt, 0, sizeof( identityExt ) );
 	identityExt.sType          = REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT;
 	identityExt.pNext          = NULL;
-	identityExt.instanceId     = entityInstanceId ? entityInstanceId : 2ULL;
+	identityExt.instanceId     = entityInstanceId;
 	identityExt.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT;
 	identityExt.rasterVisible  = 1;
 
