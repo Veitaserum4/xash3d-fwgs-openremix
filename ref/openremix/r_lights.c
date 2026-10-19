@@ -17,6 +17,8 @@ static cvar_t *rt_flsh_radius      = NULL;
 static cvar_t *rt_flsh_angle       = NULL;
 static cvar_t *rt_light_s          = NULL;
 static cvar_t *rt_light_d          = NULL;
+static cvar_t *rt_light_radius     = NULL;
+static cvar_t *rt_emis             = NULL;
 static cvar_t *rt_fog              = NULL;
 static cvar_t *rt_fog_distance     = NULL;
 static cvar_t *rt_fog_scattering   = NULL;
@@ -70,6 +72,8 @@ void R_Lights_Init( void )
 		rt_flsh_angle      = gEngfuncs.Cvar_Get( "rt_flsh_angle", "25", FCVAR_ARCHIVE, "Player flashlight outer cone angle in degrees" );
 		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "1000", FCVAR_ARCHIVE, "Map static light intensity scale" );
 		rt_light_d         = gEngfuncs.Cvar_Get( "rt_light_d", "1000", FCVAR_ARCHIVE, "Dynamic lights (explosions/projectiles) intensity scale" );
+		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "8.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
+		rt_emis            = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
 		rt_fog             = gEngfuncs.Cvar_Get( "rt_fog", "1", FCVAR_ARCHIVE, "Enable OpenRemix path-traced volumetric fog" );
 		rt_fog_distance    = gEngfuncs.Cvar_Get( "rt_fog_distance", "80.0", FCVAR_ARCHIVE, "Volumetric fog sight distance in meters" );
 		rt_fog_scattering  = gEngfuncs.Cvar_Get( "rt_fog_scattering", "1.5", FCVAR_ARCHIVE, "Volumetric fog light scattering multiplier" );
@@ -257,9 +261,9 @@ void R_Lights_NewMap( const char *entities )
 					memset( dst, 0, sizeof( *dst ) );
 
 					VectorCopy( light.origin, dst->origin );
-					dst->radiance.x = ( light.color[0] / 255.0f ) * light.intensity * ( s_scale / 255.0f );
-					dst->radiance.y = ( light.color[1] / 255.0f ) * light.intensity * ( s_scale / 255.0f );
-					dst->radiance.z = ( light.color[2] / 255.0f ) * light.intensity * ( s_scale / 255.0f );
+					dst->radiance.x = ( light.color[0] / 255.0f ) * light.intensity * s_scale;
+					dst->radiance.y = ( light.color[1] / 255.0f ) * light.intensity * s_scale;
+					dst->radiance.z = ( light.color[2] / 255.0f ) * light.intensity * s_scale;
 					dst->intensity = light.intensity;
 					dst->style = ( has & LT_HAS_STYLE ) ? light.style : 0;
 					dst->is_spot = ( classname == LT_CLASS_SPOT );
@@ -287,6 +291,9 @@ void R_Lights_NewMap( const char *entities )
 					dst->hash = R_LightMakeHash( g_lights.static_lights_count, dst->origin );
 
 					// Build Remix Sphere/Spot Light definition
+					float srcRadius = ( rt_light_radius ? rt_light_radius->value : 8.0f );
+					if( srcRadius < 1.0f ) srcRadius = 1.0f;
+
 					remixapi_LightInfoSphereEXT sphereExt;
 					memset( &sphereExt, 0, sizeof( sphereExt ) );
 					sphereExt.sType                   = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
@@ -294,7 +301,7 @@ void R_Lights_NewMap( const char *entities )
 					sphereExt.position.x             = dst->origin[0];
 					sphereExt.position.y             = dst->origin[1];
 					sphereExt.position.z             = dst->origin[2];
-					sphereExt.radius                  = dst->is_spot ? 4.0f : 6.0f;
+					sphereExt.radius                  = dst->is_spot ? ( srcRadius * 0.6f ) : srcRadius;
 					sphereExt.volumetricRadianceScale = 1.0f;
 
 					if( dst->is_spot )
@@ -331,9 +338,9 @@ void R_Lights_NewMap( const char *entities )
 				{
 					g_lights.has_sun = true;
 					float sun_scale = ( rt_sun ? rt_sun->value : 7000.0f );
-					g_lights.sun_radiance.x = ( light.color[0] / 255.0f ) * light.intensity * ( sun_scale / 255.0f );
-					g_lights.sun_radiance.y = ( light.color[1] / 255.0f ) * light.intensity * ( sun_scale / 255.0f );
-					g_lights.sun_radiance.z = ( light.color[2] / 255.0f ) * light.intensity * ( sun_scale / 255.0f );
+					g_lights.sun_radiance.x = ( light.color[0] / 255.0f ) * light.intensity * sun_scale;
+					g_lights.sun_radiance.y = ( light.color[1] / 255.0f ) * light.intensity * sun_scale;
+					g_lights.sun_radiance.z = ( light.color[2] / 255.0f ) * light.intensity * sun_scale;
 
 					float pitch = ( has & LT_HAS_PITCH ) ? light.pitch : 45.0f;
 					float angle = ( has & LT_HAS_ANGLE ) ? light.angle : 0.0f;

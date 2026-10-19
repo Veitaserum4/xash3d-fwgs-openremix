@@ -12,6 +12,7 @@ remix_texture_t g_remixTextures[MAX_REMIX_TEXTURES];
 static int      s_nextTexNum = 1;
 static remixapi_MaterialHandle s_defaultMaterial = NULL;
 static remixapi_TextureHandle  s_defaultTexture  = NULL;
+static cvar_t                 *rt_emis           = NULL;
 
 // 64-bit FNV-1a Hash
 static inline uint64_t R_HashString64( const char *str )
@@ -102,6 +103,9 @@ void R_Textures_Init( void )
 	s_nextTexNum = 1;
 	s_defaultMaterial = NULL;
 	s_defaultTexture  = NULL;
+
+	if( gEngfuncs.Cvar_Get )
+		rt_emis = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
 
 	R_Textures_CreateDefaultMaterial();
 }
@@ -319,9 +323,54 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	matInfo.wrapModeU     = 1; // Repeat
 	matInfo.wrapModeV     = 1; // Repeat
 
+	// Detect light fixtures and screens to enable self-illumination emission in the path tracer
+	char lowerBase[64];
+	Q_strncpy( lowerBase, baseName, sizeof( lowerBase ) );
+	for( char *p = lowerBase; *p; p++ )
+	{
+		if( *p >= 'A' && *p <= 'Z' )
+			*p += ( 'a' - 'A' );
+	}
+
+	float emisMultiplier = ( rt_emis ? rt_emis->value : 1.0f );
+	if( emisMultiplier < 0.0f ) emisMultiplier = 0.0f;
+
+	qboolean isLightFixture = false;
+	qboolean isScreen = false;
+
+	if( strstr( lowerBase, "light" ) || strstr( lowerBase, "lght" ) ||
+	    strstr( lowerBase, "spot" ) || strstr( lowerBase, "lamp" ) ||
+	    strstr( lowerBase, "fifts_lgt" ) || strstr( lowerBase, "fifties_lgt" ) )
+	{
+		isLightFixture = true;
+	}
+	else if( strstr( lowerBase, "~" ) || strstr( lowerBase, "scrn" ) ||
+	         strstr( lowerBase, "comp" ) || strstr( lowerBase, "crt" ) )
+	{
+		isScreen = true;
+	}
+
+	if( isLightFixture && emisMultiplier > 0.0f )
+	{
+		matInfo.emissiveColorConstant.x = 1.0f;
+		matInfo.emissiveColorConstant.y = 1.0f;
+		matInfo.emissiveColorConstant.z = 1.0f;
+		matInfo.emissiveIntensity       = 40.0f * emisMultiplier;
+		matInfo.emissiveTexture         = hashStr;
+	}
+	else if( isScreen && emisMultiplier > 0.0f )
+	{
+		matInfo.emissiveColorConstant.x = 1.0f;
+		matInfo.emissiveColorConstant.y = 1.0f;
+		matInfo.emissiveColorConstant.z = 1.0f;
+		matInfo.emissiveIntensity       = 10.0f * emisMultiplier;
+		matInfo.emissiveTexture         = hashStr;
+	}
+
 	// Optional PBR suffix detection: check for <name>_n, <name>_r, <name>_m, <name>_e
 	char pbrPath[128];
 	wchar_t normHashStr[32] = { 0 };
+	wchar_t emisHashStr[32] = { 0 };
 
 	// Normal map check
 	Q_snprintf( pbrPath, sizeof( pbrPath ), "textures/%s_n.tga", name );
@@ -355,6 +404,44 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			matInfo.normalTexture = normHashStr;
 		}
 		if( pbrPic ) gEngfuncs.FS_FreeImage( pbrPic );
+	}
+
+	// PBR Emissive map check
+	Q_snprintf( pbrPath, sizeof( pbrPath ), "textures/%s_e.tga", name );
+	rgbdata_t *emisPic = gEngfuncs.FS_LoadImage ? gEngfuncs.FS_LoadImage( pbrPath, NULL, 0 ) : NULL;
+	if( !emisPic )
+	{
+		Q_snprintf( pbrPath, sizeof( pbrPath ), "textures/%s_luma.tga", name );
+		emisPic = gEngfuncs.FS_LoadImage ? gEngfuncs.FS_LoadImage( pbrPath, NULL, 0 ) : NULL;
+	}
+	if( emisPic )
+	{
+		if( emisPic->type != PF_RGBA_32 && gEngfuncs.Image_Process )
+			gEngfuncs.Image_Process( &emisPic, 0, 0, IMAGE_FORCE_RGBA, 0.0f );
+
+		if( emisPic && emisPic->buffer )
+		{
+			uint64_t emisHash = R_HashString64( pbrPath );
+			_snwprintf( emisHashStr, sizeof( emisHashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)emisHash );
+
+			remixapi_TextureInfo emisTexInfo = texInfo;
+			emisTexInfo.hash     = emisHash;
+			emisTexInfo.width    = emisPic->width;
+			emisTexInfo.height   = emisPic->height;
+			emisTexInfo.data     = emisPic->buffer;
+			emisTexInfo.dataSize = (uint64_t)emisPic->width * emisPic->height * 4;
+
+			remixapi_TextureHandle hEmis = NULL;
+			if( g_remix.CreateTexture )
+				g_remix.CreateTexture( &emisTexInfo, &hEmis );
+
+			matInfo.emissiveTexture = emisHashStr;
+			matInfo.emissiveIntensity = 40.0f * ( emisMultiplier > 0.0f ? emisMultiplier : 1.0f );
+			matInfo.emissiveColorConstant.x = 1.0f;
+			matInfo.emissiveColorConstant.y = 1.0f;
+			matInfo.emissiveColorConstant.z = 1.0f;
+		}
+		if( emisPic ) gEngfuncs.FS_FreeImage( emisPic );
 	}
 
 	if( g_remix.CreateMaterial )
