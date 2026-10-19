@@ -18,6 +18,7 @@ static cvar_t *rt_flsh_angle       = NULL;
 static cvar_t *rt_light_s          = NULL;
 static cvar_t *rt_light_d          = NULL;
 static cvar_t *rt_light_radius     = NULL;
+static cvar_t *rt_light_range      = NULL;
 static cvar_t *rt_emis             = NULL;
 static cvar_t *rt_fog              = NULL;
 static cvar_t *rt_fog_distance     = NULL;
@@ -72,7 +73,8 @@ void R_Lights_Init( void )
 		rt_flsh_angle      = gEngfuncs.Cvar_Get( "rt_flsh_angle", "25", FCVAR_ARCHIVE, "Player flashlight outer cone angle in degrees" );
 		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "1000", FCVAR_ARCHIVE, "Map static light intensity scale" );
 		rt_light_d         = gEngfuncs.Cvar_Get( "rt_light_d", "1000", FCVAR_ARCHIVE, "Dynamic lights (explosions/projectiles) intensity scale" );
-		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "8.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
+		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
+		rt_light_range     = gEngfuncs.Cvar_Get( "rt_light_range", "0", FCVAR_ARCHIVE, "Local light cutoff range (0 = unlimited physical falloff)" );
 		rt_emis            = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
 		rt_fog             = gEngfuncs.Cvar_Get( "rt_fog", "1", FCVAR_ARCHIVE, "Enable OpenRemix path-traced volumetric fog" );
 		rt_fog_distance    = gEngfuncs.Cvar_Get( "rt_fog_distance", "80.0", FCVAR_ARCHIVE, "Volumetric fog sight distance in meters" );
@@ -145,6 +147,17 @@ void R_Lights_UpdateVolumetrics( void )
 {
 	if( !g_remix.SetConfigVariable )
 		return;
+
+	if( rt_light_range && rt_light_range->value > 0.0f )
+	{
+		char rangeBuf[32];
+		Q_snprintf( rangeBuf, sizeof( rangeBuf ), "%.1f", rt_light_range->value );
+		g_remix.SetConfigVariable( "rtx.native.pathtrace.localRange", rangeBuf );
+	}
+	else
+	{
+		g_remix.SetConfigVariable( "rtx.native.pathtrace.localRange", "0" );
+	}
 
 	if( rt_fog && rt_fog->value > 0 )
 	{

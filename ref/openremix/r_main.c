@@ -68,8 +68,10 @@ qboolean R_Init( void )
 	// 5. Configure global path tracer coordinates and units
 	if( g_remix.SetConfigVariable )
 	{
-		// GoldSrc units: 1 unit = 0.025 meters
-		g_remix.SetConfigVariable( "rtx.native.pathtrace.sceneScale", "0.025" );
+		// GoldSrc units: 1 unit = 0.0254 meters (1 inch)
+		g_remix.SetConfigVariable( "rtx.native.pathtrace.sceneScale", "0.0254" );
+		// Unlimited physically based falloff (disable artificial 16-unit cutoff)
+		g_remix.SetConfigVariable( "rtx.native.pathtrace.localRange", "0" );
 		// GoldSrc coordinates: Z-up (0: X, 1: Y, 2: Z)
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.volumetricUpAxis", "2" );
 		// Enable viewmodel ray-traced lighting

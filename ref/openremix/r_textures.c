@@ -355,7 +355,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		matInfo.emissiveColorConstant.x = 1.0f;
 		matInfo.emissiveColorConstant.y = 1.0f;
 		matInfo.emissiveColorConstant.z = 1.0f;
-		matInfo.emissiveIntensity       = 40.0f * emisMultiplier;
+		matInfo.emissiveIntensity       = 150.0f * emisMultiplier;
 		matInfo.emissiveTexture         = hashStr;
 	}
 	else if( isScreen && emisMultiplier > 0.0f )
