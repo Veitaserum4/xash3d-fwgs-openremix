@@ -267,6 +267,32 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	mipsExt.sType    = REMIXAPI_STRUCT_TYPE_TEXTURE_GENERATE_MIPS_EXT;
 	mipsExt.generate = 1;
 
+	const byte *uploadData = rgbaData;
+	byte *sanitizedBuffer = NULL;
+	if( entry->isCutout && rgbaData && width > 0 && height > 0 )
+	{
+		uint32_t numPixels = width * height;
+		sanitizedBuffer = (byte *)Mem_Malloc( r_temppool, numPixels * 4 );
+		if( sanitizedBuffer )
+		{
+			memcpy( sanitizedBuffer, rgbaData, numPixels * 4 );
+			for( uint32_t i = 0; i < numPixels; i++ )
+			{
+				byte r = sanitizedBuffer[i * 4 + 0];
+				byte g = sanitizedBuffer[i * 4 + 1];
+				byte b = sanitizedBuffer[i * 4 + 2];
+				byte a = sanitizedBuffer[i * 4 + 3];
+
+				// Half-Life 1-bit alpha test: blue palette index 255 (0, 0, 255) or 0 alpha is transparent
+				if( a == 0 || ( r == 0 && g == 0 && b == 255 ) )
+					sanitizedBuffer[i * 4 + 3] = 0;
+				else
+					sanitizedBuffer[i * 4 + 3] = 255;
+			}
+			uploadData = sanitizedBuffer;
+		}
+	}
+
 	remixapi_TextureInfo texInfo;
 	memset( &texInfo, 0, sizeof( texInfo ) );
 	texInfo.sType     = REMIXAPI_STRUCT_TYPE_TEXTURE_INFO;
@@ -277,7 +303,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	texInfo.depth     = 1;
 	texInfo.mipLevels = 1;
 	texInfo.format    = REMIXAPI_FORMAT_R8G8B8A8_UNORM;
-	texInfo.data      = rgbaData;
+	texInfo.data      = uploadData;
 	texInfo.dataSize  = (uint64_t)width * height * 4;
 
 	if( g_remix.CreateTexture )
@@ -287,6 +313,12 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		{
 			gEngfuncs.Con_Reportf( S_WARN "ref_openremix: CreateTexture failed for %s (code %u)\n", name, (unsigned)err );
 		}
+	}
+
+	if( sanitizedBuffer )
+	{
+		Mem_Free( sanitizedBuffer );
+		sanitizedBuffer = NULL;
 	}
 
 	// 2. Create OpenRemix Material
@@ -625,15 +657,40 @@ remixapi_MaterialHandle R_Textures_GetOrCreateForBSP( texture_t *tx, const model
 	}
 
 	// 3. Try searching with map name prefix e.g. #maps/<map>.bsp:<name>.mip
-	if( mod && mod->name )
+	const model_t *world = tr.worldmodel ? tr.worldmodel : mod;
+	const char *mapName = ( world && world->name && world->name[0] != '*' ) ? world->name : ( ( mod && mod->name && mod->name[0] != '*' ) ? mod->name : NULL );
+	if( mapName )
 	{
 		char mapTexName[128];
-		Q_snprintf( mapTexName, sizeof( mapTexName ), "#%s:%s.mip", mod->name, tx->name );
+		Q_snprintf( mapTexName, sizeof( mapTexName ), "#%s:%s.mip", mapName, tx->name );
 		existing = R_Textures_Find( mapTexName );
 		if( existing > 0 && g_remixTextures[existing].matHandle )
 		{
 			tx->gl_texturenum = existing;
 			return g_remixTextures[existing].matHandle;
+		}
+
+		if( gEngfuncs.FS_LoadImage )
+		{
+			rgbdata_t *pic = gEngfuncs.FS_LoadImage( mapTexName, NULL, 0 );
+			if( pic )
+			{
+				if( pic->type != PF_RGBA_32 && gEngfuncs.Image_Process )
+					gEngfuncs.Image_Process( &pic, 0, 0, IMAGE_FORCE_RGBA, 0.0f );
+
+				if( pic && pic->buffer )
+				{
+					int texnum = R_Textures_UploadRGBA( mapTexName, pic->width, pic->height, pic->buffer, 0 );
+					tx->gl_texturenum = texnum;
+					gEngfuncs.FS_FreeImage( pic );
+					if( texnum > 0 && g_remixTextures[texnum].matHandle )
+						return g_remixTextures[texnum].matHandle;
+				}
+				else if( pic )
+				{
+					gEngfuncs.FS_FreeImage( pic );
+				}
+			}
 		}
 	}
 

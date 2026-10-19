@@ -411,25 +411,31 @@ void R_BSP_NewMap( model_t *worldmodel )
 	g_bspState.worldMeshHash = worldHash;
 	g_bspState.worldMesh = R_BSP_BuildMeshFromSurfaces( worldmodel, 0, worldmodel->nummodelsurfaces, worldHash );
 
-	gEngfuncs.Con_Printf( "^2ref_openremix: Built static world BLAS for %s (handle %p, hash 0x%llx)^7\n",
-	                      worldmodel->name, (void *)g_bspState.worldMesh, (unsigned long long)worldHash );
+	gEngfuncs.Con_Reportf( "^2ref_openremix: Built static world BLAS for %s (handle %p, hash 0x%llx)^7\n",
+	                       worldmodel->name, (void *)g_bspState.worldMesh, (unsigned long long)worldHash );
 
 	// 2. Build Submodel Meshes (*1, *2, ...)
-	if( worldmodel->numsubmodels > 1 && gp_cl && gp_cl->models )
+	if( worldmodel->numsubmodels > 1 )
 	{
 		for( int i = 1; i < worldmodel->numsubmodels && g_bspState.numSubmodels < MAX_BSP_SUBMODELS; i++ )
 		{
 			char subName[16];
 			Q_snprintf( subName, sizeof( subName ), "*%d", i );
 
-			// Locate model in engine client list
+			// Locate model in engine model cache
 			model_t *submod = NULL;
-			for( int m = 1; m < gp_cl->nummodels; m++ )
+			if( gEngfuncs.Mod_ForName )
+				submod = gEngfuncs.Mod_ForName( subName, false, false );
+
+			if( !submod && gp_cl && gp_cl->models )
 			{
-				if( gp_cl->models[m] && !strcmp( gp_cl->models[m]->name, subName ) )
+				for( int m = 1; m < gp_cl->nummodels; m++ )
 				{
-					submod = gp_cl->models[m];
-					break;
+					if( gp_cl->models[m] && !strcmp( gp_cl->models[m]->name, subName ) )
+					{
+						submod = gp_cl->models[m];
+						break;
+					}
 				}
 			}
 
@@ -452,22 +458,45 @@ void R_BSP_NewMap( model_t *worldmodel )
 			}
 		}
 
-		gEngfuncs.Con_Printf( "^2ref_openremix: Built %u brush submodel BLAS meshes^7\n", g_bspState.numSubmodels );
+		gEngfuncs.Con_Reportf( "^2ref_openremix: Built %u brush submodel BLAS meshes^7\n", g_bspState.numSubmodels );
 	}
 }
 
 //
-// Submodel Lookup
+// Submodel Lookup (with on-demand construction fallback)
 //
 remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod )
 {
-	if( !mod )
+	if( !mod || mod->type != mod_brush || mod->nummodelsurfaces <= 0 )
 		return NULL;
 
 	for( uint32_t i = 0; i < g_bspState.numSubmodels; i++ )
 	{
 		if( g_bspState.submodels[i].model == mod || !strcmp( g_bspState.submodels[i].name, mod->name ) )
 			return g_bspState.submodels[i].meshHandle;
+	}
+
+	// On-demand build if not yet cached
+	if( g_bspState.numSubmodels < MAX_BSP_SUBMODELS )
+	{
+		const char *wname = tr.worldmodel ? tr.worldmodel->name : "bsp";
+		char hashStr[128];
+		Q_snprintf( hashStr, sizeof( hashStr ), "%s_%s", wname, mod->name );
+		uint64_t subHash = R_HashString64( hashStr );
+
+		remixapi_MeshHandle subMesh = R_BSP_BuildMeshFromSurfaces( mod, mod->firstmodelsurface,
+		                                                          mod->nummodelsurfaces, subHash );
+		if( subMesh )
+		{
+			bsp_submodel_mesh_t *entry = &g_bspState.submodels[g_bspState.numSubmodels++];
+			entry->model      = mod;
+			entry->meshHandle = subMesh;
+			entry->hash       = subHash;
+			Q_strncpy( entry->name, mod->name, sizeof( entry->name ) );
+			gEngfuncs.Con_Reportf( "^2ref_openremix: Built brush submodel BLAS on-demand for %s (handle %p)^7\n",
+			                       mod->name, (void *)subMesh );
+			return subMesh;
+		}
 	}
 
 	return NULL;
@@ -487,6 +516,12 @@ qboolean R_BSP_AddEntity( cl_entity_t *clent, int type )
 	(void)type;
 	if( !clent || !clent->model )
 		return false;
+
+	if( FBitSet( clent->curstate.effects, EF_NODRAW ) )
+		return false;
+
+	if( clent->curstate.rendermode != kRenderNormal && CL_FxBlend( clent ) <= 0 )
+		return true; // invisible, consumed
 
 	if( clent->curstate.rendermode == kRenderNormal )
 	{
@@ -537,8 +572,7 @@ void R_BSP_DrawWorld( void )
 	memset( &instance, 0, sizeof( instance ) );
 	instance.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
 	instance.pNext         = &identityExt;
-	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL |
-	                         REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
+	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
 	instance.mesh          = g_bspState.worldMesh;
 	instance.transform     = identityTransform;
 	instance.doubleSided   = 1;
@@ -565,8 +599,14 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 		return;
 
 	// Build 4x4 transform from entity orientation
+	vec3_t angles;
+	if( VectorIsNull( ent->angles ) )
+		VectorClear( angles );
+	else
+		VectorCopy( ent->angles, angles );
+
 	matrix4x4 objMatrix;
-	Matrix4x4_CreateFromEntity( objMatrix, ent->angles, ent->origin, 1.0f );
+	Matrix4x4_CreateFromEntity( objMatrix, angles, ent->origin, 1.0f );
 
 	// Convert to 3x4 row-major remixapi_Transform
 	remixapi_Transform transform;
@@ -592,8 +632,7 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	memset( &instance, 0, sizeof( instance ) );
 	instance.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
 	instance.pNext         = &identityExt;
-	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL |
-	                         REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
+	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
 	instance.mesh          = subMesh;
 	instance.transform     = transform;
 	instance.doubleSided   = 1;
