@@ -193,7 +193,8 @@ void R_BeginFrame( qboolean clearScene )
 	tr.frametime = gp_host ? gp_host->frametime : 0.0;
 	tr.framecount++;
 
-	R_BSP_ClearEntities();
+	// Entity lists are cleared by the engine via R_ClearScene inside CL_EmitEntities,
+	// which runs BEFORE R_BeginFrame. Clearing here would discard every queued entity.
 	R_Sprite_BeginFrame();
 	R_UI_BeginFrame();
 }
@@ -445,11 +446,15 @@ void R_RenderScene( void )
 	// Store efrags for static and fragmented entities in the world (doors, func_wall grates, etc.)
 	if( tr.worldmodel && tr.worldmodel->leafs && gEngfuncs.R_StoreEfrags )
 	{
+		extern int g_bspSceneCount;
+		// R_StoreEfrags skips ents with visframe == framecount and sets it after adding;
+		// pass a distinct value so our AddEntity dedupe (keyed on g_bspSceneCount) still runs.
+		const int efragFrame = -g_bspSceneCount;
 		for( int i = 0; i <= tr.worldmodel->numleafs; i++ )
 		{
 			mleaf_t *pleaf = &tr.worldmodel->leafs[i];
 			if( pleaf->efrags )
-				gEngfuncs.R_StoreEfrags( &pleaf->efrags, (int)tr.framecount );
+				gEngfuncs.R_StoreEfrags( &pleaf->efrags, efragFrame );
 		}
 	}
 

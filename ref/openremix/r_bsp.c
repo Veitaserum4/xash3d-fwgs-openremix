@@ -508,10 +508,13 @@ remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod )
 //
 // Entity List Collection Hooks
 //
+int g_bspSceneCount = 1;
+
 void R_BSP_ClearEntities( void )
 {
 	g_bspState.num_solid_entities = 0;
 	g_bspState.num_trans_entities = 0;
+	g_bspSceneCount++;
 }
 
 qboolean R_BSP_AddEntity( cl_entity_t *clent, int type )
@@ -523,10 +526,10 @@ qboolean R_BSP_AddEntity( cl_entity_t *clent, int type )
 	if( FBitSet( clent->curstate.effects, EF_NODRAW ) )
 		return false;
 
-	// Prevent duplicate entity additions within the same frame
-	if( clent->visframe == (int)tr.framecount )
-		return true; // Already processed for this frame
-	clent->visframe = (int)tr.framecount;
+	// Prevent duplicate entity additions within the same scene
+	if( clent->visframe == g_bspSceneCount )
+		return true;
+	clent->visframe = g_bspSceneCount;
 
 	// Do not cull brush models based on CL_FxBlend; in Half-Life, translucent/cutout
 	// brushes (such as floor grates and glass) often have renderamt set to 0.
