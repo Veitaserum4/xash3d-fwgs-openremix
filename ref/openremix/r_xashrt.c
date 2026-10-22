@@ -535,6 +535,14 @@ qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, w
 
 	char key[128], path[256];
 	R_XRT_TextureKey( texname, key, sizeof( key ) );
+
+	// XashRT ships its own HD replacements for these models (rt/valve/models); their textures
+	// only fit those meshes, not the stock models we draw
+	static const char *replacedModels[] = { "#models/v_crowbar/" };
+	for( size_t i = 0; i < ARRAYSIZE( replacedModels ); i++ )
+		if( !Q_strnicmp( key, replacedModels[i], Q_strlen( replacedModels[i] ) ) )
+			return false;
+
 	Q_snprintf( path, sizeof( path ), "rt/mat/%s%s.ktx2", key, suffix ? suffix : "" );
 	return R_XRT_GetFileTexture( path, out, outLen );
 }
