@@ -34,7 +34,7 @@ typedef struct remix_texture_s
 	// Self-illuminated material on the original texture (additive brushes), created on demand
 	remixapi_MaterialHandle emisMatHandle;
 
-	// Fullbright pixels of "~" textures (palette 224..255) as an emission mask
+	// Emission mask generated from the texture's brightest areas
 	remixapi_TextureHandle  lumaTexHandle;
 
 	qboolean                registered;

@@ -732,69 +732,62 @@ remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum )
 }
 
 /*
- * Fullbright (luma) mask for Half-Life "~" textures: palette entries 224..255 are fullbright,
- * as GoldSrc draws them. Captured by the load hooks from the paletted image, consumed by
- * R_Textures_UploadRGBA as the emission mask when no _e map replaces it.
+ * R_Textures_CreateBrightMask - Emission mask for emissive textures with no authored mask:
+ * the texture's own colour where it is near its brightest (lamp panels, lit screen
+ * content), fading to black below (fixture frames, bezels, the surrounding wall)
  */
-static byte    *s_lumaPixels = NULL;
-static uint32_t s_lumaWidth = 0, s_lumaHeight = 0;
-
-static qboolean R_Textures_IsLumaName( const char *name )
+static qboolean R_Textures_CreateBrightMask( remix_texture_t *entry, const byte *rgba, uint32_t width, uint32_t height,
+                                             uint64_t hash, wchar_t *out, size_t outLen )
 {
-	if( !name ) return false;
-	const char *base = name;
-	const char *seps[3] = { strrchr( name, '/' ), strrchr( name, '\\' ), strrchr( name, ':' ) };
-	for( int i = 0; i < 3; i++ )
-		if( seps[i] && seps[i] + 1 > base )
-			base = seps[i] + 1;
-	return base[0] == '~' || ( base[0] == '+' && base[1] && base[2] == '~' );
-}
+	if( !g_remix.CreateTexture || !rgba )
+		return false;
 
-static void R_Textures_ClearLuma( void )
-{
-	if( s_lumaPixels )
-		Mem_Free( s_lumaPixels );
-	s_lumaPixels = NULL;
-	s_lumaWidth = s_lumaHeight = 0;
-}
-
-static void R_Textures_CaptureLuma( const rgbdata_t *pic )
-{
-	R_Textures_ClearLuma();
-	if( !pic || !pic->buffer || !pic->palette || ( pic->type != PF_INDEXED_32 && pic->type != PF_INDEXED_24 ) )
-		return;
-
-	const int stride = ( pic->type == PF_INDEXED_32 ) ? 4 : 3;
-	const size_t numPixels = (size_t)pic->width * pic->height;
-	byte *out = (byte *)Mem_Malloc( r_temppool, numPixels * 4 );
-	qboolean any = false;
-
-	for( size_t i = 0; out && i < numPixels; i++ )
+	const size_t numPixels = (size_t)width * height;
+	float maxLum = 0.0f;
+	for( size_t i = 0; i < numPixels; i++ )
 	{
-		byte idx = pic->buffer[i];
-		if( idx >= 224 )
-		{
-			out[i * 4 + 0] = pic->palette[idx * stride + 0];
-			out[i * 4 + 1] = pic->palette[idx * stride + 1];
-			out[i * 4 + 2] = pic->palette[idx * stride + 2];
-			any = true;
-		}
-		else
-		{
-			out[i * 4 + 0] = out[i * 4 + 1] = out[i * 4 + 2] = 0;
-		}
-		out[i * 4 + 3] = 255;
+		float lum = 0.2126f * rgba[i * 4 + 0] + 0.7152f * rgba[i * 4 + 1] + 0.0722f * rgba[i * 4 + 2];
+		maxLum = Q_max( maxLum, lum );
+	}
+	if( maxLum < 16.0f )
+		return false;
+
+	byte *mask = (byte *)Mem_Malloc( r_temppool, numPixels * 4 );
+	if( !mask )
+		return false;
+
+	const float lo = 0.55f * maxLum, hi = 0.85f * maxLum;
+	for( size_t i = 0; i < numPixels; i++ )
+	{
+		float lum = 0.2126f * rgba[i * 4 + 0] + 0.7152f * rgba[i * 4 + 1] + 0.0722f * rgba[i * 4 + 2];
+		float t = bound( 0.0f, ( lum - lo ) / ( hi - lo ), 1.0f );
+		t = t * t * ( 3.0f - 2.0f * t ); // smoothstep
+		for( int c = 0; c < 3; c++ )
+			mask[i * 4 + c] = (byte)( rgba[i * 4 + c] * t );
+		mask[i * 4 + 3] = 255;
 	}
 
-	if( !any )
-	{
-		if( out ) Mem_Free( out );
-		return;
-	}
+	remixapi_TextureInfo info;
+	memset( &info, 0, sizeof( info ) );
+	info.sType     = REMIXAPI_STRUCT_TYPE_TEXTURE_INFO;
+	info.hash      = hash;
+	info.width     = width;
+	info.height    = height;
+	info.depth     = 1;
+	info.mipLevels = 1;
+	info.format    = REMIXAPI_FORMAT_R8G8B8A8_UNORM;
+	info.data      = mask;
+	info.dataSize  = (uint64_t)numPixels * 4;
 
-	s_lumaPixels = out;
-	s_lumaWidth  = pic->width;
-	s_lumaHeight = pic->height;
+	if( entry->lumaTexHandle && g_remix.DestroyTexture )
+		g_remix.DestroyTexture( entry->lumaTexHandle );
+	entry->lumaTexHandle = NULL;
+
+	qboolean ok = g_remix.CreateTexture( &info, &entry->lumaTexHandle ) == REMIXAPI_ERROR_CODE_SUCCESS;
+	Mem_Free( mask );
+	if( ok )
+		_snwprintf( out, outLen, L"0x%llx", (unsigned long long)hash );
+	return ok;
 }
 
 /*
@@ -978,23 +971,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			opaqueExt.roughnessConstant = xrtMat.roughness;
 	}
 
-	wchar_t lumaHashStr[32];
-	const wchar_t *lumaPath = NULL;
-	if( s_lumaPixels && s_lumaWidth == width && s_lumaHeight == height && g_remix.CreateTexture )
-	{
-		uint64_t lumaHash = texHash ^ 0x4C554D414D41534BULL; // "LUMAMASK"
-		remixapi_TextureInfo lumaInfo = texInfo;
-		lumaInfo.pNext    = NULL;
-		lumaInfo.hash     = lumaHash;
-		lumaInfo.data     = s_lumaPixels;
-		lumaInfo.dataSize = (uint64_t)width * height * 4;
-		if( g_remix.CreateTexture( &lumaInfo, &entry->lumaTexHandle ) == REMIXAPI_ERROR_CODE_SUCCESS )
-		{
-			_snwprintf( lumaHashStr, ARRAYSIZE( lumaHashStr ), L"0x%llx", (unsigned long long)lumaHash );
-			lumaPath = lumaHashStr;
-		}
-	}
-	R_Textures_ClearLuma();
+	wchar_t maskHashStr[32];
 
 	wchar_t xrtAlbedo[32], xrtEmissive[32];
 	const wchar_t *albedoPath = R_XRT_GetReplacementTexture( name, "", xrtAlbedo, ARRAYSIZE( xrtAlbedo ) ) ? xrtAlbedo : hashStr;
@@ -1013,15 +990,22 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	{
 		// XashRT: emissiveMult / texture lights, masked by the _e map when one exists
 		qboolean hasEmissiveMap = R_XRT_GetReplacementTexture( name, "_e", xrtEmissive, ARRAYSIZE( xrtEmissive ) );
-		float strength = ( hasXrt && xrtMat.emissive > 0.0f ) ? xrtMat.emissive : ( hasEmissiveMap || lumaPath ) ? 10.0f : 0.0f;
+		float strength = ( hasXrt && xrtMat.emissive > 0.0f ) ? xrtMat.emissive : hasEmissiveMap ? 10.0f : 0.0f;
 		if( strength > 0.0f && emisMultiplier > 0.0f )
 		{
 			matInfo.emissiveColorConstant.x = 1.0f;
 			matInfo.emissiveColorConstant.y = 1.0f;
 			matInfo.emissiveColorConstant.z = 1.0f;
 			matInfo.emissiveIntensity       = strength * emisMultiplier;
-			// _e map, else GoldSrc's fullbright pixels, else (no mask at all) the whole texture
-			matInfo.emissiveTexture         = hasEmissiveMap ? xrtEmissive : lumaPath ? lumaPath : albedoPath;
+			// XashRT's _e map, else the texture's brightest areas (lamp panels, screen content).
+			// GoldSrc's fullbright palette range is no guide: some lights are entirely
+			// fullbright (frame included), others have none
+			if( hasEmissiveMap )
+				matInfo.emissiveTexture = xrtEmissive;
+			else if( R_Textures_CreateBrightMask( entry, rgbaData, width, height, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) )
+				matInfo.emissiveTexture = maskHashStr;
+			else
+				matInfo.emissiveTexture = albedoPath;
 		}
 	}
 	else if( !entry->isGlass )
@@ -1056,7 +1040,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			matInfo.emissiveColorConstant.y = 1.0f;
 			matInfo.emissiveColorConstant.z = 1.0f;
 			matInfo.emissiveIntensity       = 150.0f * emisMultiplier;
-			matInfo.emissiveTexture         = lumaPath ? lumaPath : hashStr;
+			matInfo.emissiveTexture         = R_Textures_CreateBrightMask( entry, rgbaData, width, height, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) ? maskHashStr : hashStr;
 		}
 		else if( isScreen && emisMultiplier > 0.0f )
 		{
@@ -1064,7 +1048,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			matInfo.emissiveColorConstant.y = 1.0f;
 			matInfo.emissiveColorConstant.z = 1.0f;
 			matInfo.emissiveIntensity       = 10.0f * emisMultiplier;
-			matInfo.emissiveTexture         = lumaPath ? lumaPath : hashStr;
+			matInfo.emissiveTexture         = R_Textures_CreateBrightMask( entry, rgbaData, width, height, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) ? maskHashStr : hashStr;
 		}
 	}
 
@@ -1202,15 +1186,10 @@ int GL_LoadTexture_Hook( const char *name, const byte *buf, size_t size, int fla
 	if( !gEngfuncs.FS_LoadImage )
 		return 0;
 
-	qboolean wantLuma = R_Textures_IsLumaName( name );
-	gEngfuncs.Image_SetForceFlags( wantLuma ? IL_KEEP_8BIT : 0 );
-	rgbdata_t *pic = gEngfuncs.FS_LoadImage( name, buf, size );
 	gEngfuncs.Image_SetForceFlags( 0 );
+	rgbdata_t *pic = gEngfuncs.FS_LoadImage( name, buf, size );
 	if( !pic )
 		return 0;
-
-	if( wantLuma )
-		R_Textures_CaptureLuma( pic );
 
 	int originalFlags = pic->flags;
 	if( pic->type != PF_RGBA_32 && gEngfuncs.Image_Process )
@@ -1227,7 +1206,6 @@ int GL_LoadTexture_Hook( const char *name, const byte *buf, size_t size, int fla
 	R_Textures_ForceOpaque( pic, originalFlags );
 
 	int texnum = R_Textures_UploadRGBA( name, pic->width, pic->height, pic->buffer, flags );
-	R_Textures_ClearLuma(); // not consumed if the texture already existed
 
 	if( gEngfuncs.FS_FreeImage )
 		gEngfuncs.FS_FreeImage( pic );
@@ -1243,9 +1221,6 @@ int GL_LoadTextureFromBuffer_Hook( const char *name, rgbdata_t *pic, texFlags_t 
 	(void)update;
 	if( !pic || !pic->buffer || pic->width <= 0 || pic->height <= 0 )
 		return 0;
-
-	if( R_Textures_IsLumaName( name ) )
-		R_Textures_CaptureLuma( pic );
 
 	// Convert paletted or 24-bit to 32-bit RGBA if needed
 	rgbdata_t *workingPic = pic;
@@ -1267,7 +1242,6 @@ int GL_LoadTextureFromBuffer_Hook( const char *name, rgbdata_t *pic, texFlags_t 
 	}
 
 	int texnum = R_Textures_UploadRGBA( name, workingPic->width, workingPic->height, workingPic->buffer, flags );
-	R_Textures_ClearLuma();
 
 	if( freedCopy && gEngfuncs.FS_FreeImage )
 		gEngfuncs.FS_FreeImage( workingPic );
