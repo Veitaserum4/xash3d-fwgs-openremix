@@ -22,6 +22,8 @@ static cvar_t *rt_emis         = NULL;
 static cvar_t *rt_glass        = NULL;
 static cvar_t *rt_fx_emis      = NULL;
 static cvar_t *rt_glass_texture = NULL;
+static cvar_t *rt_chrome        = NULL;
+static cvar_t *rt_chrome_roughness = NULL;
 static cvar_t *rt_water         = NULL;
 static cvar_t *rt_water_dist    = NULL;
 static cvar_t *rt_water_ior     = NULL;
@@ -30,6 +32,11 @@ static cvar_t *rt_water_ior     = NULL;
 static qboolean s_hasWaterMedium = false;
 static float    s_waterColor[3]  = { 0.6f, 0.8f, 0.85f };
 static float    s_waterDist      = 300.0f;
+static cvar_t  *rt_water_fog     = NULL;
+
+// The fog parameters of the image being uploaded (rgbdata_t fogParams: GoldSrc water keeps
+// its fog colour and density in the palette), NULL when it has none
+static const byte *s_uploadFog = NULL;
 
 static void R_Textures_DestroyFx( remix_texture_t *entry );
 static cvar_t *rt_refr_glass   = NULL;
@@ -392,6 +399,9 @@ void R_Textures_Init( void )
 		rt_water_dist   = gEngfuncs.Cvar_Get( "rt_water_dist", "300", FCVAR_ARCHIVE, "Water clarity: distance in units over which the water colour is absorbed once" );
 		rt_water_ior    = gEngfuncs.Cvar_Get( "rt_water_ior", "1.333", FCVAR_ARCHIVE, "Water index of refraction" );
 		rt_glass_texture = gEngfuncs.Cvar_Get( "rt_glass_texture", "0.2", FCVAR_ARCHIVE, "Glass texture opacity: 0 = clear refractive glass, >0 = textured glass with reflections (applies on map load)" );
+		rt_water_fog    = gEngfuncs.Cvar_Get( "rt_water_fog", "1", FCVAR_ARCHIVE, "Underwater fog density, relative to Half-Life's (0 = clear water); applies on map load" );
+		rt_chrome       = gEngfuncs.Cvar_Get( "rt_chrome", "1", FCVAR_ARCHIVE, "Model chrome as path-traced metal (0 = Half-Life's fake environment map); applies on model load" );
+		rt_chrome_roughness = gEngfuncs.Cvar_Get( "rt_chrome_roughness", "0.2", FCVAR_ARCHIVE, "Roughness of path-traced model chrome; applies on model load" );
 		rt_fx_emis      = gEngfuncs.Cvar_Get( "rt_fx_emis", "4.0", FCVAR_ARCHIVE, "Emission intensity of path-traced additive effects (beams, glow sprites); applies on texture load" );
 		rt_refr_glass   = gEngfuncs.Cvar_Get( "rt_refr_glass", "1.52", FCVAR_ARCHIVE, "Glass index of refraction (matching xash-rt)" );
 		rt_glass_dist   = gEngfuncs.Cvar_Get( "rt_glass_dist", "2000.0", FCVAR_ARCHIVE, "Glass transmittance measurement distance" );
@@ -1039,6 +1049,22 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		s_waterColor[2] = waterExt.transmittanceColor.z;
 		s_waterDist     = waterExt.transmittanceMeasurementDistance;
 
+		// Under water: Half-Life's fog (GL_EXP, density fogParams[3] * 0.000025 per unit), its
+		// colour the medium's. Colour^(d / D) falls like exp(-density d) for the colour's mean
+		// when D = -ln(mean) / density
+		const float fogScale = rt_water_fog ? rt_water_fog->value : 1.0f;
+		if( s_uploadFog && s_uploadFog[3] > 0 && ( s_uploadFog[0] || s_uploadFog[1] || s_uploadFog[2] ) && fogScale > 0.0f )
+		{
+			float mean = 0.0f;
+			for( int c = 0; c < 3; c++ )
+			{
+				s_waterColor[c] = bound( 0.02f, s_uploadFog[c] / 255.0f, 0.98f );
+				mean += s_waterColor[c] / 3.0f;
+			}
+			const float density = s_uploadFog[3] * 0.000025f * fogScale;
+			s_waterDist = -logf( mean ) / density;
+		}
+
 		// Waves: XashRT's water normal map, scrolled in three layers like Source's water
 		hasWaterNormal = R_XRT_GetFileTexture( "rt/WaterNormal_n.ktx2", waterNormal, ARRAYSIZE( waterNormal ) );
 		if( hasWaterNormal )
@@ -1063,6 +1089,11 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	wchar_t xrtOrm[32], xrtNormal[32];
 	qboolean hasOrm    = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_orm", xrtOrm, ARRAYSIZE( xrtOrm ) );
 	qboolean hasNormal = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_n", xrtNormal, ARRAYSIZE( xrtNormal ) );
+
+	// Studio textures (#<model>/<texture>.mdl) carry the model's texture flags; others carry TF_*
+	const size_t nameLen = Q_strlen( name );
+	const qboolean chrome = rt_chrome && rt_chrome->value > 0.0f && !clearGlass && !waterBody && !hasOrm &&
+	                        FBitSet( flags, STUDIO_NF_CHROME ) && nameLen > 4 && !Q_stricmp( name + nameLen - 4, ".mdl" );
 	remixapi_MaterialPbrRemapEXT pbrRemap;
 	remixapi_MaterialNormalEncodingEXT normalEnc;
 	memset( &pbrRemap, 0, sizeof( pbrRemap ) );
@@ -1135,6 +1166,20 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			opaqueExt.roughnessConstant = 0.05f;
 		}
 
+		// Model chrome (STUDIO_NF_CHROME) faked reflections with view-dependent texture coordinates;
+		// the path tracer reflects the scene, so it becomes metal tinted by the texture's mean colour,
+		// brought up to a bright metal's reflectance
+		if( chrome )
+		{
+			const float peak = Q_max( entry->avgColor[0], Q_max( entry->avgColor[1], entry->avgColor[2] ));
+			const float scale = peak > 0.001f ? 0.9f / peak : 0.0f;
+			opaqueExt.albedoConstant.x  = peak > 0.001f ? entry->avgColor[0] * scale : 0.9f;
+			opaqueExt.albedoConstant.y  = peak > 0.001f ? entry->avgColor[1] * scale : 0.9f;
+			opaqueExt.albedoConstant.z  = peak > 0.001f ? entry->avgColor[2] * scale : 0.9f;
+			opaqueExt.metallicConstant  = 1.0f;
+			opaqueExt.roughnessConstant = rt_chrome_roughness ? bound( 0.0f, rt_chrome_roughness->value, 1.0f ) : 0.2f;
+		}
+
 		if( hasXrt && xrtMat.metallic >= 0.0f )
 			opaqueExt.metallicConstant = xrtMat.metallic;
 		if( hasXrt && xrtMat.roughness >= 0.0f )
@@ -1163,7 +1208,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	matInfo.sType         = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
 	matInfo.pNext         = clearGlass ? (void *)&transExt : waterBody ? (void *)&waterExt : (void *)&opaqueExt;
 	matInfo.hash          = matHash;
-	matInfo.albedoTexture = ( clearGlass || waterBody ) ? NULL : albedoPath;
+	matInfo.albedoTexture = ( clearGlass || waterBody || chrome ) ? NULL : albedoPath;
 	if( waterBody && hasWaterNormal )
 		matInfo.normalTexture = waterNormal;
 	else if( hasNormal )
@@ -1391,7 +1436,9 @@ int GL_LoadTexture_Hook( const char *name, const byte *buf, size_t size, int fla
 
 	R_Textures_ForceOpaque( pic, originalFlags );
 
+	s_uploadFog = pic->fogParams;
 	int texnum = R_Textures_UploadRGBA( name, pic->width, pic->height, pic->buffer, flags );
+	s_uploadFog = NULL;
 
 	if( gEngfuncs.FS_FreeImage )
 		gEngfuncs.FS_FreeImage( pic );
@@ -1427,7 +1474,9 @@ int GL_LoadTextureFromBuffer_Hook( const char *name, rgbdata_t *pic, texFlags_t 
 		}
 	}
 
+	s_uploadFog = pic->fogParams;
 	int texnum = R_Textures_UploadRGBA( name, workingPic->width, workingPic->height, workingPic->buffer, flags );
+	s_uploadFog = NULL;
 
 	if( freedCopy && gEngfuncs.FS_FreeImage )
 		gEngfuncs.FS_FreeImage( workingPic );

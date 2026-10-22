@@ -66,6 +66,8 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 |---|---|---|
 | `rt_glass_texture` | 0.2 | Glass texture opacity; 0 = clear refractive glass |
 | `rt_water`, `rt_water_dist`, `rt_water_ior` | 1, 300, 1.333 | Ray-traced water, its clarity (units) and refraction |
+| `rt_water_fog` | 1 | Underwater fog density relative to Half-Life's (0 = clear) |
+| `rt_chrome`, `rt_chrome_roughness` | 1, 0.2 | Model chrome as real reflective metal, and its roughness (0 = classic fake chrome) |
 | `rt_fx_emis` | 4 | Glow of beams, sprites and sparks |
 | `rt_emis` | 1 | Glow of light fixtures and screens |
 | `rt_xrt` | 1 | Use XashRT content from `rt/` |
