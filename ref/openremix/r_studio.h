@@ -63,6 +63,7 @@ void     R_StudioShutdown( void );
 void     R_StudioNewMap( void );
 void     R_DrawStudioModel( cl_entity_t *e );
 void     R_DrawViewModel( void );
+void     R_DrawPlayerBody( void );
 
 // Engine callback interface
 int      R_StudioDrawModel( int flags );

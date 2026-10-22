@@ -710,6 +710,9 @@ void R_RenderScene( void )
 	// Draw local player viewmodel
 	R_DrawViewModel();
 
+	// Local player's body, visible only in reflections
+	R_DrawPlayerBody();
+
 	// Draw particle systems, beams, and special effects
 	if( gEngfuncs.CL_DrawEFX )
 	{

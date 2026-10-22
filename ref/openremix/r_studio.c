@@ -8,6 +8,10 @@
 #include "r_remix.h"
 #include "r_studioint.h"
 
+// Set while R_DrawPlayerBody draws the local player's body (reflection-only instances)
+static qboolean s_drawingPlayerBody = false;
+static cvar_t  *rt_player_body = NULL;
+
 // Master studio state instance
 studio_draw_state_t g_studio;
 
@@ -687,8 +691,8 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 
 	if( isViewModel )
 		categoryFlags |= REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
-	else if( RI.currententity && RI.currententity->player )
-		categoryFlags |= ( REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_MODEL | REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY );
+	else if( s_drawingPlayerBody )
+		categoryFlags |= REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY; // seen only in reflections
 
 	if( FBitSet( g_nFaceFlags, STUDIO_NF_MASKED ) )
 		categoryFlags |= REMIXAPI_INSTANCE_CATEGORY_BIT_ALPHA_BLEND_TO_CUTOUT;
@@ -1220,6 +1224,7 @@ R_StudioInit
 */
 void R_StudioInit( void )
 {
+	rt_player_body = gEngfuncs.Cvar_Get( "rt_player_body", "1", FCVAR_ARCHIVE, "Show your own player model in reflections (first person)" );
 	memset( &g_studio, 0, sizeof( g_studio ) );
 	pStudioDraw = NULL;
 	if( gEngfuncs.pfnGetCvarPointer )
@@ -1283,6 +1288,36 @@ static qboolean R_AllowFlipViewModel( cl_entity_t *e )
 R_DrawStudioModel
 ====================
 */
+/*
+ * R_DrawPlayerBody - The local player's own model in first person, seen only in reflections
+ * (mirrors, chrome, water) and bounce light. The engine does not pass the local player to
+ * the renderer in first person (CL_AddVisibleEntity), but keeps its state up to date.
+ */
+void R_DrawPlayerBody( void )
+{
+	if( !rt_player_body || rt_player_body->value <= 0.0f || !gp_cl )
+		return;
+
+	if( ENGINE_GET_PARM( PARM_THIRDPERSON ) || ENGINE_GET_PARM( PARM_LOCAL_HEALTH ) <= 0 || !CL_IsViewEntityLocalPlayer() )
+		return;
+
+	cl_entity_t *e = CL_GetEntityByIndex( gp_cl->playernum + 1 );
+	if( !e || !e->player || !e->model || e->model->type != mod_studio || FBitSet( e->curstate.effects, EF_NODRAW ) )
+		return;
+
+	R_StudioSetupTimings();
+	RI.currententity = e;
+	RI.currentmodel  = e->model;
+
+	// Render only: events (footsteps, muzzle flashes) already ran for the real player
+	s_drawingPlayerBody = true;
+	if( pStudioDraw && pStudioDraw->StudioDrawPlayer )
+		pStudioDraw->StudioDrawPlayer( STUDIO_RENDER, &e->curstate );
+	else
+		R_StudioDrawPlayer( STUDIO_RENDER, &e->curstate );
+	s_drawingPlayerBody = false;
+}
+
 void R_DrawStudioModel( cl_entity_t *e )
 {
 	if( !e || !e->model || e->model->type != mod_studio )
