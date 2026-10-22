@@ -68,7 +68,7 @@ void R_Lights_Init( void )
 
 	if( gEngfuncs.Cvar_Get )
 	{
-		rt_sun             = gEngfuncs.Cvar_Get( "rt_sun", "2000", FCVAR_ARCHIVE, "Sun directional light intensity" );
+		rt_sun             = gEngfuncs.Cvar_Get( "rt_sun", "50", FCVAR_ARCHIVE, "Sun irradiance for a white light_environment at brightness 255" );
 		rt_sun_diameter    = gEngfuncs.Cvar_Get( "rt_sun_diameter", "0.53", FCVAR_ARCHIVE, "Sun angular diameter in degrees" );
 		rt_flsh            = gEngfuncs.Cvar_Get( "rt_flsh", "800", FCVAR_ARCHIVE, "Player flashlight intensity" );
 		rt_flsh_radius     = gEngfuncs.Cvar_Get( "rt_flsh_radius", "2.0", FCVAR_ARCHIVE, "Player flashlight source radius" );
@@ -354,7 +354,7 @@ void R_Lights_NewMap( const char *entities )
 				if( has & LT_HAS_COLOR )
 				{
 					g_lights.has_sun = true;
-					float sun_scale = ( rt_sun ? rt_sun->value : 2000.0f );
+					float sun_scale = ( rt_sun ? rt_sun->value : 50.0f );
 					g_lights.sun_radiance.x = ( light.color[0] / 255.0f ) * light.intensity * sun_scale;
 					g_lights.sun_radiance.y = ( light.color[1] / 255.0f ) * light.intensity * sun_scale;
 					g_lights.sun_radiance.z = ( light.color[2] / 255.0f ) * light.intensity * sun_scale;

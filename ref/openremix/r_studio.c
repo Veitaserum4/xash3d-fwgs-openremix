@@ -753,6 +753,70 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 
 /*
 ====================
+R_StudioSetupChrome
+
+Texture coordinates of chrome meshes (STUDIO_NF_CHROME): a fake environment map, each
+normal measured against axes facing from a slowly orbiting point to its bone, as
+R_StudioSetupChrome in ref/gl. Indexed like the normals the triangle commands use.
+====================
+*/
+static void R_StudioSetupChrome( const mstudiotexture_t *ptexture, const short *pskinref, const mstudiomesh_t *pmesh )
+{
+	static cvar_t *r_glowshellfreq;
+	static vec3_t chromeright[MAXSTUDIOBONES], chromeup[MAXSTUDIOBONES];
+	qboolean ready[MAXSTUDIOBONES] = { 0 };
+
+	const byte *pnormbone = (const byte *)m_pStudioHeader + m_pSubModel->norminfoindex;
+	const vec3_t *pstudionorms = (const vec3_t *)((const byte *)m_pStudioHeader + m_pSubModel->normindex);
+
+	if( !r_glowshellfreq )
+		r_glowshellfreq = gEngfuncs.Cvar_Get( "r_glowshellfreq", "2.2", 0, "glowing shell frequency update" );
+	const float freq = r_glowshellfreq->value;
+	const vec3_t origin = {
+		cosf( freq * g_studio.time ) * 4000.0f,
+		sinf( freq * g_studio.time ) * 4000.0f,
+		cosf( freq * g_studio.time * 0.33f ) * 4000.0f
+	};
+
+	int k = 0;
+	for( int j = 0; j < m_pSubModel->nummesh; j++ )
+	{
+		const int flags = ptexture[pskinref[pmesh[j].skinref]].flags | g_nForceFaceFlags;
+		if( !FBitSet( flags, STUDIO_NF_CHROME ))
+		{
+			k += pmesh[j].numnorms;
+			continue;
+		}
+
+		for( int i = 0; i < pmesh[j].numnorms && k < MAXSTUDIOVERTS; i++, k++ )
+		{
+			const int bone = pnormbone[k];
+			if( !ready[bone] )
+			{
+				vec3_t tmp, upvec, rightvec;
+				VectorNegate( origin, tmp );
+				tmp[0] += g_studio.lighttransform[bone][0][3];
+				tmp[1] += g_studio.lighttransform[bone][1][3];
+				tmp[2] += g_studio.lighttransform[bone][2][3];
+				VectorNormalize( tmp );
+				CrossProduct( tmp, RI.vright, upvec );
+				VectorNormalize( upvec );
+				CrossProduct( upvec, tmp, rightvec );
+				VectorNormalize( rightvec );
+
+				Matrix3x4_VectorIRotate( g_studio.lighttransform[bone], upvec, chromeup[bone] );
+				Matrix3x4_VectorIRotate( g_studio.lighttransform[bone], rightvec, chromeright[bone] );
+				ready[bone] = true;
+			}
+
+			g_studio.chrome[k][0] = ( DotProduct( pstudionorms[k], chromeright[bone] ) + 1.0f ) * 32.0f;
+			g_studio.chrome[k][1] = ( DotProduct( pstudionorms[k], chromeup[bone] ) + 1.0f ) * 32.0f;
+		}
+	}
+}
+
+/*
+====================
 R_StudioDrawPoints
 ====================
 */
@@ -780,6 +844,8 @@ static void R_StudioDrawPoints( void )
 	R_StudioGenerateNormals();
 
 	mstudiomesh_t *pmesh = (mstudiomesh_t *)((byte *)m_pStudioHeader + m_pSubModel->meshindex);
+
+	R_StudioSetupChrome( ptexture, pskinref, pmesh );
 
 	int bodypartIdx = (int)( m_pBodyPart - (mstudiobodyparts_t *)((byte *)m_pStudioHeader + m_pStudioHeader->bodypartindex) );
 	int submodelIdx = (int)( m_pSubModel - (mstudiomodel_t *)((byte *)m_pStudioHeader + m_pBodyPart->modelindex) );
