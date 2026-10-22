@@ -20,17 +20,18 @@ static cvar_t *rt_ies              = NULL;
  */
 enum { IES_FLASHLIGHT, IES_SPOTLIGHT, IES_COUNT };
 
-// A handheld LED torch: a tight hotspot, the reflector's ring around it, then soft spill
+// A handheld LED torch with a reflector: a flat hotspot with a steep edge (6-10 degrees), a
+// dimmer spill holding the reflector's faint ring (14 degrees), cut off hard at 35 degrees
 static const char s_iesFlashlight[] =
 	"IESNA:LM-63-2002\n"
 	"[TEST] ref_openremix built-in\n"
 	"[LUMINAIRE] Flashlight (approximation)\n"
 	"TILT=NONE\n"
-	"1 -1 1 15 1 1 1 0 0 0\n"
+	"1 -1 1 21 1 1 1 0 0 0\n"
 	"1 1 3\n"
-	"0 2 4 6 8 9 10 12 15 20 25 30 35 40 90\n"
+	"0 3 5 6 7 8 9 10 12 13 14 15 17 20 25 30 32 34 35 36 90\n"
 	"0\n"
-	"1000 990 900 620 540 600 420 260 190 140 90 45 15 0 0\n";
+	"1000 1000 990 960 820 520 280 200 185 200 215 190 170 160 150 135 110 50 15 0 0\n";
 
 // A ceiling spot or downlight: broad and smooth, gone by 80 degrees
 static const char s_iesSpotlight[] =
