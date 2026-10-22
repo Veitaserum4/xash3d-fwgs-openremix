@@ -737,7 +737,7 @@ remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum )
  * content), fading to black below (fixture frames, bezels, the surrounding wall)
  */
 static qboolean R_Textures_CreateBrightMask( remix_texture_t *entry, const byte *rgba, uint32_t width, uint32_t height,
-                                             uint64_t hash, wchar_t *out, size_t outLen )
+                                             float strength, uint64_t hash, wchar_t *out, size_t outLen )
 {
 	if( !g_remix.CreateTexture || !rgba )
 		return false;
@@ -756,12 +756,16 @@ static qboolean R_Textures_CreateBrightMask( remix_texture_t *entry, const byte 
 	if( !mask )
 		return false;
 
+	// Everything else keeps a faint base glow of about its normally lit brightness
+	// (1 / strength), so a lamp's dimmer surround doesn't turn into a black ring
+	const float base = bound( 0.0f, 1.0f / Q_max( strength, 1.0f ), 0.25f );
 	const float lo = 0.55f * maxLum, hi = 0.85f * maxLum;
 	for( size_t i = 0; i < numPixels; i++ )
 	{
 		float lum = 0.2126f * rgba[i * 4 + 0] + 0.7152f * rgba[i * 4 + 1] + 0.0722f * rgba[i * 4 + 2];
 		float t = bound( 0.0f, ( lum - lo ) / ( hi - lo ), 1.0f );
 		t = t * t * ( 3.0f - 2.0f * t ); // smoothstep
+		t = base + ( 1.0f - base ) * t;
 		for( int c = 0; c < 3; c++ )
 			mask[i * 4 + c] = (byte)( rgba[i * 4 + c] * t );
 		mask[i * 4 + 3] = 255;
@@ -1002,7 +1006,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			// fullbright (frame included), others have none
 			if( hasEmissiveMap )
 				matInfo.emissiveTexture = xrtEmissive;
-			else if( R_Textures_CreateBrightMask( entry, rgbaData, width, height, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) )
+			else if( R_Textures_CreateBrightMask( entry, rgbaData, width, height, strength * emisMultiplier, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) )
 				matInfo.emissiveTexture = maskHashStr;
 			else
 				matInfo.emissiveTexture = albedoPath;
@@ -1040,7 +1044,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			matInfo.emissiveColorConstant.y = 1.0f;
 			matInfo.emissiveColorConstant.z = 1.0f;
 			matInfo.emissiveIntensity       = 150.0f * emisMultiplier;
-			matInfo.emissiveTexture         = R_Textures_CreateBrightMask( entry, rgbaData, width, height, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) ? maskHashStr : hashStr;
+			matInfo.emissiveTexture         = R_Textures_CreateBrightMask( entry, rgbaData, width, height, matInfo.emissiveIntensity, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) ? maskHashStr : hashStr;
 		}
 		else if( isScreen && emisMultiplier > 0.0f )
 		{
@@ -1048,7 +1052,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			matInfo.emissiveColorConstant.y = 1.0f;
 			matInfo.emissiveColorConstant.z = 1.0f;
 			matInfo.emissiveIntensity       = 10.0f * emisMultiplier;
-			matInfo.emissiveTexture         = R_Textures_CreateBrightMask( entry, rgbaData, width, height, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) ? maskHashStr : hashStr;
+			matInfo.emissiveTexture         = R_Textures_CreateBrightMask( entry, rgbaData, width, height, matInfo.emissiveIntensity, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) ? maskHashStr : hashStr;
 		}
 	}
 

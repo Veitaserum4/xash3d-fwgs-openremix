@@ -37,6 +37,8 @@ static rt_setting_t s_settings[] =
 	{ "rt_upscaler",  "3", "Upscaler: 0 off, 1 auto, 2 FSR 3.1, 3 DLSS" },
 	{ "rt_vsync",     "0", "Vertical sync" },
 	{ "rt_framegen",  "0", "Frame generation" },
+	{ "rt_framegen_mult", "0", "Frame generation multiplier: 0 = 2x, 1 = 3x, 2 = 4x" },
+	{ "rt_dlss_quality",  "3", "DLSS quality: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance" },
 };
 
 // Fog cvars are owned by r_lights.c; changes re-apply the volumetric configuration
@@ -62,6 +64,18 @@ static void R_Settings_Push( rt_setting_t *s )
 	{
 		key   = "rtx.native.frameGeneration";
 		value = s->ptr->value > 0.0f ? "1" : "0";
+	}
+	else if( !Q_strcmp( s->cvar, "rt_framegen_mult" ) )
+	{
+		static const char *frames[] = { "1", "2", "3" }; // generated frames per rendered frame
+		key   = "rtx.native.frameGenerationFrames";
+		value = frames[bound( 0, (int)s->ptr->value, (int)ARRAYSIZE( frames ) - 1 )];
+	}
+	else if( !Q_strcmp( s->cvar, "rt_dlss_quality" ) )
+	{
+		static const char *quality[] = { "native-aa", "quality", "balanced", "performance", "ultra-performance" };
+		key   = "rtx.native.pathtrace.dlssQuality";
+		value = quality[bound( 0, (int)s->ptr->value, (int)ARRAYSIZE( quality ) - 1 )];
 	}
 
 	if( key && g_remix.SetConfigVariable )
