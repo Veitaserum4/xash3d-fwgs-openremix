@@ -24,6 +24,7 @@ static cvar_t *rt_fx_emis      = NULL;
 static cvar_t *rt_glass_texture = NULL;
 static cvar_t *rt_chrome        = NULL;
 static cvar_t *rt_chrome_roughness = NULL;
+static cvar_t *rt_chrome_reflectance = NULL;
 static cvar_t *rt_water         = NULL;
 static cvar_t *rt_water_dist    = NULL;
 static cvar_t *rt_water_ior     = NULL;
@@ -401,7 +402,8 @@ void R_Textures_Init( void )
 		rt_glass_texture = gEngfuncs.Cvar_Get( "rt_glass_texture", "0.2", FCVAR_ARCHIVE, "Glass texture opacity: 0 = clear refractive glass, >0 = textured glass with reflections (applies on map load)" );
 		rt_water_fog    = gEngfuncs.Cvar_Get( "rt_water_fog", "1", FCVAR_ARCHIVE, "Underwater fog density, relative to Half-Life's (0 = clear water); applies on map load" );
 		rt_chrome       = gEngfuncs.Cvar_Get( "rt_chrome", "1", FCVAR_ARCHIVE, "Model chrome as path-traced metal (0 = Half-Life's fake environment map); applies on model load" );
-		rt_chrome_roughness = gEngfuncs.Cvar_Get( "rt_chrome_roughness", "0.2", FCVAR_ARCHIVE, "Roughness of path-traced model chrome; applies on model load" );
+		rt_chrome_roughness = gEngfuncs.Cvar_Get( "rt_chrome_roughness", "0.3", FCVAR_ARCHIVE, "Roughness of path-traced model chrome; applies on model load" );
+		rt_chrome_reflectance = gEngfuncs.Cvar_Get( "rt_chrome_reflectance", "0.6", FCVAR_ARCHIVE, "Reflectance of path-traced model chrome (steel ~0.6, polished silver ~0.95); applies on model load" );
 		rt_fx_emis      = gEngfuncs.Cvar_Get( "rt_fx_emis", "4.0", FCVAR_ARCHIVE, "Emission intensity of path-traced additive effects (beams, glow sprites); applies on texture load" );
 		rt_refr_glass   = gEngfuncs.Cvar_Get( "rt_refr_glass", "1.52", FCVAR_ARCHIVE, "Glass index of refraction (matching xash-rt)" );
 		rt_glass_dist   = gEngfuncs.Cvar_Get( "rt_glass_dist", "2000.0", FCVAR_ARCHIVE, "Glass transmittance measurement distance" );
@@ -1166,24 +1168,26 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			opaqueExt.roughnessConstant = 0.05f;
 		}
 
-		// Model chrome (STUDIO_NF_CHROME) faked reflections with view-dependent texture coordinates;
-		// the path tracer reflects the scene, so it becomes metal tinted by the texture's mean colour,
-		// brought up to a bright metal's reflectance
-		if( chrome )
-		{
-			const float peak = Q_max( entry->avgColor[0], Q_max( entry->avgColor[1], entry->avgColor[2] ));
-			const float scale = peak > 0.001f ? 0.9f / peak : 0.0f;
-			opaqueExt.albedoConstant.x  = peak > 0.001f ? entry->avgColor[0] * scale : 0.9f;
-			opaqueExt.albedoConstant.y  = peak > 0.001f ? entry->avgColor[1] * scale : 0.9f;
-			opaqueExt.albedoConstant.z  = peak > 0.001f ? entry->avgColor[2] * scale : 0.9f;
-			opaqueExt.metallicConstant  = 1.0f;
-			opaqueExt.roughnessConstant = rt_chrome_roughness ? bound( 0.0f, rt_chrome_roughness->value, 1.0f ) : 0.2f;
-		}
-
 		if( hasXrt && xrtMat.metallic >= 0.0f )
 			opaqueExt.metallicConstant = xrtMat.metallic;
 		if( hasXrt && xrtMat.roughness >= 0.0f )
 			opaqueExt.roughnessConstant = xrtMat.roughness;
+
+		// Model chrome (STUDIO_NF_CHROME) faked reflections with view-dependent texture coordinates;
+		// the path tracer reflects the scene, so it becomes metal tinted by the texture's mean colour
+		// at rt_chrome_reflectance. These settings decide every chrome texture, XashRT's included
+		// (its near-mirror values were tuned for another renderer)
+		if( chrome )
+		{
+			const float reflectance = rt_chrome_reflectance ? bound( 0.0f, rt_chrome_reflectance->value, 1.0f ) : 0.6f;
+			const float peak = Q_max( entry->avgColor[0], Q_max( entry->avgColor[1], entry->avgColor[2] ));
+			const float scale = peak > 0.001f ? reflectance / peak : 0.0f;
+			opaqueExt.albedoConstant.x  = peak > 0.001f ? entry->avgColor[0] * scale : reflectance;
+			opaqueExt.albedoConstant.y  = peak > 0.001f ? entry->avgColor[1] * scale : reflectance;
+			opaqueExt.albedoConstant.z  = peak > 0.001f ? entry->avgColor[2] * scale : reflectance;
+			opaqueExt.metallicConstant  = 1.0f;
+			opaqueExt.roughnessConstant = rt_chrome_roughness ? bound( 0.0f, rt_chrome_roughness->value, 1.0f ) : 0.3f;
+		}
 
 		if( hasOrm )
 		{
