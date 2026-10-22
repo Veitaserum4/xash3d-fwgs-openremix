@@ -289,7 +289,7 @@ Texture names and material overrides
 typedef struct
 {
 	char     key[96];
-	qboolean mirror, glass;
+	qboolean mirror, glass, water, opaque;
 	float    metallic, roughness;
 	float    emissiveMult, lightIntensity; // < 0 when unset
 } xrt_texentry_t;
@@ -350,6 +350,8 @@ qboolean R_XRT_GetMaterial( const char *texname, xrt_material_t *out )
 
 	out->mirror    = e->mirror;
 	out->glass     = e->glass;
+	out->water     = e->water;
+	out->opaque    = e->opaque;
 	out->metallic  = e->metallic;
 	out->roughness = e->roughness;
 	out->emissive  = -1.0f;
@@ -405,6 +407,8 @@ static void R_XRT_LoadTexturesJson( void )
 		Q_strncpy( e->key, name, sizeof( e->key ) );
 		e->mirror         = J_Num( J_Get( o, "isMirror" ), 0 ) != 0;
 		e->glass          = J_Num( J_Get( o, "isGlass" ), 0 ) != 0;
+		e->water          = J_Num( J_Get( o, "isWater" ), 0 ) != 0;
+		e->opaque         = J_Num( J_Get( o, "forceOpaque" ), 0 ) != 0;
 		e->metallic       = (float)J_Num( J_Get( o, "metallicDefault" ), -1 );
 		e->roughness      = (float)J_Num( J_Get( o, "roughnessDefault" ), -1 );
 		e->emissiveMult   = (float)J_Num( J_Get( o, "emissiveMult" ), -1 );
@@ -526,12 +530,19 @@ static qboolean R_XRT_CreateKtx( const char *path, uint64_t hash, remixapi_Textu
 
 qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, wchar_t *out, size_t outLen )
 {
-	if( !rt_xrt || rt_xrt->value <= 0.0f || !texname || !g_remix.CreateTexture )
+	if( !texname )
 		return false;
 
 	char key[128], path[256];
 	R_XRT_TextureKey( texname, key, sizeof( key ) );
 	Q_snprintf( path, sizeof( path ), "rt/mat/%s%s.ktx2", key, suffix ? suffix : "" );
+	return R_XRT_GetFileTexture( path, out, outLen );
+}
+
+qboolean R_XRT_GetFileTexture( const char *path, wchar_t *out, size_t outLen )
+{
+	if( !rt_xrt || rt_xrt->value <= 0.0f || !path || !g_remix.CreateTexture )
+		return false;
 
 	uint64_t hash = R_XRT_Hash64( path );
 	xrt_ktx_t *slot = NULL;

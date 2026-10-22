@@ -18,6 +18,8 @@ typedef struct xrt_material_s
 {
 	qboolean mirror;         // perfect chrome (metallic 1, roughness 0)
 	qboolean glass;          // ray-traced glass
+	qboolean water;          // water body
+	qboolean opaque;         // forceOpaque: liquids that glow (slime), not water bodies
 	float    metallic;       // < 0 when unset
 	float    roughness;      // < 0 when unset
 	float    emissive;       // emission strength (already scaled), < 0 when unset
@@ -31,6 +33,8 @@ qboolean R_XRT_Active( void );
 qboolean R_XRT_GetMaterial( const char *texname, xrt_material_t *out );
 // Loads rt/mat/<key><suffix>.ktx2 once and writes its Remix texture hash path ("0x...") to out
 qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, wchar_t *out, size_t outLen );
+// Loads any KTX2 under rt/ (e.g. "rt/WaterNormal_n.ktx2") once
+qboolean R_XRT_GetFileTexture( const char *path, wchar_t *out, size_t outLen );
 void     R_XRT_TextureKey( const char *texname, char *out, size_t outSize );
 
 // Per-map glTF scene (mirrors, added geometry, hand-placed lights)

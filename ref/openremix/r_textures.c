@@ -22,6 +22,14 @@ static cvar_t *rt_emis         = NULL;
 static cvar_t *rt_glass        = NULL;
 static cvar_t *rt_fx_emis      = NULL;
 static cvar_t *rt_glass_texture = NULL;
+static cvar_t *rt_water         = NULL;
+static cvar_t *rt_water_dist    = NULL;
+static cvar_t *rt_water_ior     = NULL;
+
+// Absorption of the last water body created (the underwater camera medium)
+static qboolean s_hasWaterMedium = false;
+static float    s_waterColor[3]  = { 0.6f, 0.8f, 0.85f };
+static float    s_waterDist      = 300.0f;
 
 static void R_Textures_DestroyFx( remix_texture_t *entry );
 static cvar_t *rt_refr_glass   = NULL;
@@ -123,6 +131,18 @@ static remixapi_MaterialHandle s_glassMaterial = NULL;
  * R_Textures_GlassTextured - Glass shows its texture (opaque-PBR coverage blend) instead of
  * being clear refractive transmission
  */
+/*
+ * R_Textures_GetWaterMedium - Absorption of the map's water, for the underwater camera
+ */
+qboolean R_Textures_GetWaterMedium( float color[3], float *distance )
+{
+	if( !s_hasWaterMedium )
+		return false;
+	VectorCopy( s_waterColor, color );
+	*distance = s_waterDist;
+	return true;
+}
+
 qboolean R_Textures_GlassTextured( void )
 {
 	return rt_glass_texture && rt_glass_texture->value > 0.0f;
@@ -368,6 +388,9 @@ void R_Textures_Init( void )
 	{
 		rt_emis         = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
 		rt_glass        = gEngfuncs.Cvar_Get( "rt_glass", "1", FCVAR_ARCHIVE, "Enable OpenRemix ray-traced glass translucency" );
+		rt_water        = gEngfuncs.Cvar_Get( "rt_water", "1", FCVAR_ARCHIVE, "Ray-traced water bodies (refraction, absorption, Snell's window); applies on map load" );
+		rt_water_dist   = gEngfuncs.Cvar_Get( "rt_water_dist", "300", FCVAR_ARCHIVE, "Water clarity: distance in units over which the water colour is absorbed once" );
+		rt_water_ior    = gEngfuncs.Cvar_Get( "rt_water_ior", "1.333", FCVAR_ARCHIVE, "Water index of refraction" );
 		rt_glass_texture = gEngfuncs.Cvar_Get( "rt_glass_texture", "0.2", FCVAR_ARCHIVE, "Glass texture opacity: 0 = clear refractive glass, >0 = textured glass with reflections (applies on map load)" );
 		rt_fx_emis      = gEngfuncs.Cvar_Get( "rt_fx_emis", "4.0", FCVAR_ARCHIVE, "Emission intensity of path-traced additive effects (beams, glow sprites); applies on texture load" );
 		rt_refr_glass   = gEngfuncs.Cvar_Get( "rt_refr_glass", "1.52", FCVAR_ARCHIVE, "Glass index of refraction (matching xash-rt)" );
@@ -911,6 +934,84 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	// rt_glass_texture opacity, smooth so it reflects (GoldSrc-style, no refraction).
 	qboolean clearGlass = entry->isGlass && !R_Textures_GlassTextured();
 
+	// Water ("!" / "*" textures, XashRT isWater): a refractive body that absorbs with depth;
+	// seen from below it shows Snell's window and total internal reflection
+	qboolean waterBody = ( entry->isWater || ( hasXrt && xrtMat.water ) ) && !( hasXrt && xrtMat.opaque ) && !entry->isSky && !clearGlass &&
+	                     rt_water && rt_water->value > 0.0f;
+	remixapi_MaterialInfoTranslucentEXT waterExt;
+	remixapi_MaterialNormalEncodingEXT waterNormalEnc;
+	remixapi_MaterialNormalScrollEXT waterScroll;
+	wchar_t waterNormal[32];
+	qboolean hasWaterNormal = false;
+
+	if( waterBody )
+	{
+		// Absorption colour: the texture's average, normalised so the brightest channel passes
+		// 90% per measurement distance (HL water textures are dark; their hue is what matters)
+		double sum[3] = { 0, 0, 0 };
+		const size_t numPixels = (size_t)width * height;
+		for( size_t i = 0; i < numPixels; i++ )
+			for( int c = 0; c < 3; c++ )
+				sum[c] += rgbaData[i * 4 + c];
+		float avg[3], peak = 1e-3f;
+		for( int c = 0; c < 3; c++ )
+		{
+			avg[c] = (float)( sum[c] / ( numPixels * 255.0 ) );
+			peak = Q_max( peak, avg[c] );
+		}
+
+		memset( &waterExt, 0, sizeof( waterExt ) );
+		waterExt.sType           = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT;
+		waterExt.refractiveIndex = ( rt_water_ior && rt_water_ior->value >= 1.0f ) ? rt_water_ior->value : 1.333f;
+		waterExt.transmittanceColor.x = bound( 0.05f, avg[0] / peak * 0.9f, 0.98f );
+		waterExt.transmittanceColor.y = bound( 0.05f, avg[1] / peak * 0.9f, 0.98f );
+		waterExt.transmittanceColor.z = bound( 0.05f, avg[2] / peak * 0.9f, 0.98f );
+		waterExt.transmittanceMeasurementDistance = ( rt_water_dist && rt_water_dist->value > 1.0f ) ? rt_water_dist->value : 300.0f;
+
+		s_hasWaterMedium = true;
+		s_waterColor[0] = waterExt.transmittanceColor.x;
+		s_waterColor[1] = waterExt.transmittanceColor.y;
+		s_waterColor[2] = waterExt.transmittanceColor.z;
+		s_waterDist     = waterExt.transmittanceMeasurementDistance;
+
+		// Waves: XashRT's water normal map, scrolled in three layers like Source's water
+		hasWaterNormal = R_XRT_GetFileTexture( "rt/WaterNormal_n.ktx2", waterNormal, ARRAYSIZE( waterNormal ) );
+		if( hasWaterNormal )
+		{
+			memset( &waterScroll, 0, sizeof( waterScroll ) );
+			waterScroll.sType     = REMIXAPI_STRUCT_TYPE_MATERIAL_NORMAL_SCROLL_EXT;
+			waterScroll.layers    = 3;
+			waterScroll.base[0]   = 0.02f;  waterScroll.base[1]   = 0.01f;
+			waterScroll.layer1[0] = -0.015f; waterScroll.layer1[1] = 0.02f;
+			waterScroll.layer2[0] = 0.01f;  waterScroll.layer2[1] = -0.025f;
+
+			memset( &waterNormalEnc, 0, sizeof( waterNormalEnc ) );
+			waterNormalEnc.sType    = REMIXAPI_STRUCT_TYPE_MATERIAL_NORMAL_ENCODING_EXT;
+			waterNormalEnc.pNext    = &waterScroll;
+			waterNormalEnc.encoding = 5; // Source water: scrolled tangent-space map
+			waterExt.pNext = &waterNormalEnc;
+		}
+	}
+
+	// XashRT PBR maps: _orm packs roughness in green and metallic in blue (RayTracedGL1's
+	// NULL_ROUGHNESS_METALLIC swizzle); _n is a tangent-space (OpenGL convention) normal map
+	wchar_t xrtOrm[32], xrtNormal[32];
+	qboolean hasOrm    = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_orm", xrtOrm, ARRAYSIZE( xrtOrm ) );
+	qboolean hasNormal = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_n", xrtNormal, ARRAYSIZE( xrtNormal ) );
+	remixapi_MaterialPbrRemapEXT pbrRemap;
+	remixapi_MaterialNormalEncodingEXT normalEnc;
+	memset( &pbrRemap, 0, sizeof( pbrRemap ) );
+	pbrRemap.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_PBR_REMAP_EXT;
+	pbrRemap.roughness.channel  = 1;
+	pbrRemap.roughness.exponent = 1.0f;
+	pbrRemap.roughness.scale    = 1.0f;
+	pbrRemap.metallic.channel   = 2;
+	pbrRemap.metallic.exponent  = 1.0f;
+	pbrRemap.metallic.scale     = 1.0f;
+	memset( &normalEnc, 0, sizeof( normalEnc ) );
+	normalEnc.sType    = REMIXAPI_STRUCT_TYPE_MATERIAL_NORMAL_ENCODING_EXT;
+	normalEnc.encoding = 3; // tangent GL
+
 	if( clearGlass )
 	{
 		memset( &transExt, 0, sizeof( transExt ) );
@@ -973,6 +1074,18 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			opaqueExt.metallicConstant = xrtMat.metallic;
 		if( hasXrt && xrtMat.roughness >= 0.0f )
 			opaqueExt.roughnessConstant = xrtMat.roughness;
+
+		if( hasOrm )
+		{
+			opaqueExt.roughnessTexture = xrtOrm;
+			opaqueExt.metallicTexture  = xrtOrm;
+			pbrRemap.pNext   = hasNormal ? (void *)&normalEnc : NULL;
+			opaqueExt.pNext  = &pbrRemap;
+		}
+		else if( hasNormal )
+		{
+			opaqueExt.pNext = &normalEnc;
+		}
 	}
 
 	wchar_t maskHashStr[32];
@@ -983,14 +1096,18 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	remixapi_MaterialInfo matInfo;
 	memset( &matInfo, 0, sizeof( matInfo ) );
 	matInfo.sType         = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
-	matInfo.pNext         = clearGlass ? (void *)&transExt : (void *)&opaqueExt;
+	matInfo.pNext         = clearGlass ? (void *)&transExt : waterBody ? (void *)&waterExt : (void *)&opaqueExt;
 	matInfo.hash          = matHash;
-	matInfo.albedoTexture = clearGlass ? NULL : albedoPath;
+	matInfo.albedoTexture = ( clearGlass || waterBody ) ? NULL : albedoPath;
+	if( waterBody && hasWaterNormal )
+		matInfo.normalTexture = waterNormal;
+	else if( hasNormal )
+		matInfo.normalTexture = xrtNormal;
 	matInfo.filterMode    = 1; // Linear
 	matInfo.wrapModeU     = 1; // Repeat
 	matInfo.wrapModeV     = 1; // Repeat
 
-	if( !entry->isGlass && R_XRT_Active() )
+	if( !entry->isGlass && !waterBody && R_XRT_Active() )
 	{
 		// XashRT: emissiveMult / texture lights, masked by the _e map when one exists
 		qboolean hasEmissiveMap = R_XRT_GetReplacementTexture( name, "_e", xrtEmissive, ARRAYSIZE( xrtEmissive ) );
@@ -1012,7 +1129,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 				matInfo.emissiveTexture = albedoPath;
 		}
 	}
-	else if( !entry->isGlass )
+	else if( !entry->isGlass && !waterBody )
 	{
 		// Detect light fixtures and screens to enable self-illumination emission in the path tracer
 		char lowerBase[64];

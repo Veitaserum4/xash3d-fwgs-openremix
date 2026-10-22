@@ -161,9 +161,27 @@ static void R_BSP_AppendIndex( bsp_bucket_t *bucket, uint32_t idx )
 //
 // Glass / Translucent Submodel Detection
 //
+static qboolean R_BSP_IsSubmodelWater( const model_t *submod )
+{
+	if( !submod || !submod->surfaces )
+		return false;
+
+	for( int s = 0; s < submod->nummodelsurfaces; s++ )
+	{
+		const msurface_t *surf = &submod->surfaces[submod->firstmodelsurface + s];
+		if( surf->texinfo && surf->texinfo->texture && ( surf->texinfo->texture->name[0] == '!' || surf->texinfo->texture->name[0] == '*' ) )
+			return true;
+	}
+	return false;
+}
+
 static qboolean R_BSP_IsSubmodelGlass( const model_t *submod, const char *subName )
 {
 	if( !submod )
+		return false;
+
+	// func_water: drawn with its water material (a refractive body), never as glass
+	if( R_BSP_IsSubmodelWater( submod ) )
 		return false;
 
 	// 1. Check if any texture assigned to this submodel is recognized as glass
@@ -736,7 +754,13 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	// Check if this entity should be rendered with ray-traced translucent glass
 	qboolean isGlass = false;
 	qboolean isAdditive = ( ent->curstate.rendermode == kRenderTransAdd || ent->curstate.rendermode == kRenderGlow );
-	if( isAdditive )
+	qboolean isWater = R_BSP_IsSubmodelWater( ent->model );
+	if( isWater )
+	{
+		// Water bodies get their look from the water material, not the entity's blending
+		isAdditive = false;
+	}
+	else if( isAdditive )
 	{
 		// Light effects (e.g. the resonance cascade column), never glass
 	}
@@ -897,7 +921,7 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 		// so OpenRemix path tracer treats it as P::Transmission (refraction, reflection, transmission tint)
 		instance.pNext = &matExt;
 	}
-	else if( ent->curstate.rendermode != kRenderNormal && ent->curstate.rendermode != kRenderTransAlpha )
+	else if( !isWater && ent->curstate.rendermode != kRenderNormal && ent->curstate.rendermode != kRenderTransAlpha )
 	{
 		// Non-glass blending (e.g. additive glows)
 		instance.pNext = &blendExt;

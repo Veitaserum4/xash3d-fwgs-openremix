@@ -54,6 +54,7 @@ void                    R_Textures_ClearMap( void );
 qboolean                R_Textures_IsGlass( const char *name );
 remixapi_MaterialHandle R_Textures_GetGlassMaterial( void );
 qboolean                R_Textures_GlassTextured( void );
+qboolean                R_Textures_GetWaterMedium( float color[3], float *distance );
 float                   R_Textures_GlassOpacity( void );
 int                     R_Textures_Find( const char *name );
 const char             *R_Textures_GetName( unsigned int texnum );

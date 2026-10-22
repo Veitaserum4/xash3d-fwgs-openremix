@@ -443,6 +443,27 @@ void R_SetupCamera( const ref_viewpass_t *rvp )
 	paramCamera.nearPlane     = nearPlane;
 	paramCamera.farPlane      = farPlane;
 
+	// Under water: the camera sees through the water body (absorption, its colour lit by
+	// the sky and sun), and the surface above refracts with Snell's window
+	remixapi_CameraMediumEXT medium;
+	memset( &medium, 0, sizeof( medium ) );
+	medium.sType = REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT;
+	if( rvp && tr.worldmodel && tr.worldmodel->nodes && gEngfuncs.Mod_PointInLeaf )
+	{
+		mleaf_t *leaf = gEngfuncs.Mod_PointInLeaf( rvp->vieworigin, tr.worldmodel->nodes, tr.worldmodel );
+		float color[3], distance;
+		if( leaf && ( leaf->contents == CONTENTS_WATER || leaf->contents == CONTENTS_SLIME || leaf->contents == CONTENTS_LAVA ) &&
+		    R_Textures_GetWaterMedium( color, &distance ) )
+		{
+			medium.inside = 1;
+			medium.transmittanceColor.x = color[0];
+			medium.transmittanceColor.y = color[1];
+			medium.transmittanceColor.z = color[2];
+			medium.transmittanceMeasurementDistance = distance;
+			paramCamera.pNext = &medium;
+		}
+	}
+
 	remixapi_CameraInfo cameraInfo = { 0 };
 	cameraInfo.sType = REMIXAPI_STRUCT_TYPE_CAMERA_INFO;
 	cameraInfo.pNext = &paramCamera;
