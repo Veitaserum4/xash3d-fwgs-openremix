@@ -646,6 +646,21 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 	if( vertCount == 0 || indexCount == 0 )
 		return;
 
+	// The GL renderer's near plane (4 units) hides view model parts kept right at the eye, such
+	// as the shotgun's spare shell; rays have no near plane, so leave out meshes wholly before it
+	if( isViewModel )
+	{
+		float farthest = -1e30f;
+		for( uint32_t i = 0; i < vertCount; i++ )
+		{
+			vec3_t offset;
+			VectorSubtract( g_scratchVerts[i].position, RI.vieworg, offset );
+			farthest = Q_max( farthest, DotProduct( offset, RI.vforward ));
+		}
+		if( farthest < 4.0f )
+			return;
+	}
+
 	// Build Remix surface structure
 	remixapi_MeshInfoSurfaceTriangles surface;
 	memset( &surface, 0, sizeof( surface ) );
