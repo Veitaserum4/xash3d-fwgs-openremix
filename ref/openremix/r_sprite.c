@@ -6,23 +6,25 @@
 #include "r_local.h"
 #include "r_remix.h"
 #include "r_sprite.h"
+#include "r_textures.h"
+#include "r_ui.h"
 #include "sprite.h"
+#include "r_efx.h"
+#include "customentity.h"
+#include "r_bsp.h"
 
 #define NOISE_DIVISIONS   64
 #define GLARE_FALLOFF     19000.0f
 #define HASH_UNIT_QUAD    0x53505254554E4954ULL // "SPRTUNIT"
 #define HASH_DYNAMIC_BASE 0xD700000000000000ULL
 
+#ifndef M_PI2_F
+#define M_PI2_F 6.28318530717958647692f
+#endif
+
 // Static unit billboard quad mesh handle
 static remixapi_MeshHandle g_unitQuadMesh = NULL;
 static remixapi_MaterialHandle g_whiteMaterial = NULL;
-
-// Dynamic mesh ring buffer for procedural beams and particle clouds
-typedef struct dynamic_mesh_slot_s
-{
-	remixapi_MeshHandle handle;
-	uint64_t            hash;
-} dynamic_mesh_slot_t;
 
 static dynamic_mesh_slot_t g_dynamicMeshes[MAX_DYNAMIC_MESH_SLOTS];
 static uint32_t            g_dynamicMeshIndex = 0;
@@ -60,9 +62,14 @@ static void SineNoise( float *noise, int divs )
 /*
  * Helper: Create or retrieve material for sprite texture
  */
-static remixapi_MaterialHandle R_GetSpriteMaterial( int texnum )
+remixapi_MaterialHandle R_GetSpriteMaterial( int texnum )
 {
-	(void)texnum;
+	if( texnum > 0 && texnum < MAX_REMIX_TEXTURES )
+	{
+		remixapi_MaterialHandle mat = R_Textures_GetMaterial( (unsigned int)texnum );
+		if( mat ) return mat;
+	}
+
 	if( !g_whiteMaterial && g_remix.CreateMaterial )
 	{
 		remixapi_MaterialInfoOpaqueEXT opaque;
@@ -212,7 +219,7 @@ void R_Sprite_BeginFrame( void )
 /*
  * Helper: Allocate dynamic mesh slot
  */
-static dynamic_mesh_slot_t *R_AllocDynamicMeshSlot( void )
+dynamic_mesh_slot_t *R_AllocDynamicMeshSlot( void )
 {
 	if( g_dynamicMeshIndex >= MAX_DYNAMIC_MESH_SLOTS )
 		g_dynamicMeshIndex = 0;
@@ -225,58 +232,83 @@ static dynamic_mesh_slot_t *R_AllocDynamicMeshSlot( void )
 }
 
 /*
- * Helper: Configure blend and sprite soft-depth state
+ * Helper: Configure blend, identity, and raster state
  */
-static void R_SetupSpriteBlendState( remixapi_InstanceInfoBlendEXT *pBlend,
-                                     remixapi_InstanceIdentityEXT *pIdent,
-                                     remixapi_InstanceInfoSpriteEXT *pSprite,
-                                     int rendermode )
+void R_SetupSpriteBlendState( remixapi_InstanceInfoBlendEXT *pBlend,
+                              remixapi_InstanceIdentityEXT *pIdent,
+                              remixapi_InstanceRasterStateEXT *pRaster,
+                              uint64_t instanceId,
+                              int rendermode )
 {
-	memset( pBlend, 0, sizeof( *pBlend ) );
-	pBlend->sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BLEND_EXT;
-	pBlend->writeMask = 15;
-	pBlend->alphaTestCompareOp = 7; // ALWAYS pass test
-
-	memset( pIdent, 0, sizeof( *pIdent ) );
-	pIdent->sType = REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT;
-	pIdent->pNext = pBlend;
-	pIdent->rasterVisible = 1;
-
-	memset( pSprite, 0, sizeof( *pSprite ) );
-	pSprite->sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_SPRITE_EXT;
-	pSprite->pNext = pIdent;
-	pSprite->flags = REMIXAPI_SPRITE_SOFT_DEPTH_EXT;
-	pSprite->softDistance = 0.4f;
-
-	switch( rendermode )
+	if( pRaster )
 	{
-	case kRenderTransAdd:
-	case kRenderGlow:
-		pBlend->alphaBlendEnabled   = 1;
-		pBlend->srcColorBlendFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
-		pBlend->dstColorBlendFactor = 1; // VK_BLEND_FACTOR_ONE
-		pBlend->srcAlphaBlendFactor = 6;
-		pBlend->dstAlphaBlendFactor = 1;
-		pBlend->colorBlendOp        = 0;
-		pBlend->alphaBlendOp        = 0;
-		break;
+		memset( pRaster, 0, sizeof( *pRaster ) );
+		pRaster->sType              = REMIXAPI_STRUCT_TYPE_INSTANCE_RASTER_STATE_EXT;
+		pRaster->depthTest          = 1;
+		pRaster->depthWrite         = ( rendermode == kRenderNormal ) ? 1 : 0;
+		pRaster->depthCompare       = 3; // VK_COMPARE_OP_LESS_OR_EQUAL
+		pRaster->disableColorWrites = 0;
+		pRaster->pNext              = NULL;
+	}
 
-	case kRenderTransColor:
-	case kRenderTransTexture:
-	case kRenderTransAlpha:
-		pBlend->alphaBlendEnabled   = 1;
-		pBlend->srcColorBlendFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
-		pBlend->dstColorBlendFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
-		pBlend->srcAlphaBlendFactor = 6;
-		pBlend->dstAlphaBlendFactor = 7;
-		pBlend->colorBlendOp        = 0;
-		pBlend->alphaBlendOp        = 0;
-		break;
+	if( pBlend )
+	{
+		memset( pBlend, 0, sizeof( *pBlend ) );
+		pBlend->sType               = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BLEND_EXT;
+		pBlend->pNext               = pRaster;
+		pBlend->writeMask           = 15;
+		pBlend->alphaTestCompareOp  = 7; // ALWAYS pass test
+		pBlend->alphaTestEnabled    = 0;
 
-	case kRenderNormal:
-	default:
-		pBlend->alphaBlendEnabled   = 0;
-		break;
+		// Configure modulation: Texel * Vertex
+		pBlend->textureColorArg1Source = 1; // Texel
+		pBlend->textureColorArg2Source = 2; // Vertex
+		pBlend->textureColorOperation  = 3; // Modulate
+
+		pBlend->textureAlphaArg1Source = 1; // Texel
+		pBlend->textureAlphaArg2Source = 2; // Vertex
+		pBlend->textureAlphaOperation  = 3; // Modulate
+
+		switch( rendermode )
+		{
+		case kRenderTransAdd:
+		case kRenderGlow:
+			pBlend->alphaBlendEnabled   = 1;
+			pBlend->srcColorBlendFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
+			pBlend->dstColorBlendFactor = 1; // VK_BLEND_FACTOR_ONE
+			pBlend->srcAlphaBlendFactor = 1;
+			pBlend->dstAlphaBlendFactor = 1;
+			pBlend->colorBlendOp        = 0;
+			pBlend->alphaBlendOp        = 0;
+			break;
+
+		case kRenderTransColor:
+		case kRenderTransTexture:
+		case kRenderTransAlpha:
+			pBlend->alphaBlendEnabled   = 1;
+			pBlend->srcColorBlendFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
+			pBlend->dstColorBlendFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+			pBlend->srcAlphaBlendFactor = 6;
+			pBlend->dstAlphaBlendFactor = 7;
+			pBlend->colorBlendOp        = 0;
+			pBlend->alphaBlendOp        = 0;
+			break;
+
+		case kRenderNormal:
+		default:
+			pBlend->alphaBlendEnabled   = 0;
+			break;
+		}
+	}
+
+	if( pIdent )
+	{
+		memset( pIdent, 0, sizeof( *pIdent ) );
+		pIdent->sType          = REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT;
+		pIdent->pNext          = pBlend;
+		pIdent->classification = REMIXAPI_INSTANCE_RASTER_ONLY_EXT; // 2
+		pIdent->rasterVisible  = 1;
+		pIdent->instanceId     = instanceId ? instanceId : 1ULL;
 	}
 }
 
@@ -445,17 +477,58 @@ void R_DrawSpriteModel( cl_entity_t *e )
 	transform.matrix[2][2] = v_forward[2];
 	transform.matrix[2][3] = center[2];
 
-	// 4. Configure Blend and Soft-depth Extensions
+	// 4. Configure Blend, Material, and Raster Extensions
+	remixapi_InstanceRasterStateEXT rasterState;
 	remixapi_InstanceInfoBlendEXT blendExt;
 	remixapi_InstanceIdentityEXT identExt;
-	remixapi_InstanceInfoSpriteEXT spriteExt;
-	R_SetupSpriteBlendState( &blendExt, &identExt, &spriteExt, e->curstate.rendermode );
+	uint64_t spriteInstId = ( (uint64_t)e->index << 32 ) ^ ( (uint64_t)e->curstate.frame << 16 ) ^ (uint64_t)(uintptr_t)model;
+	if( !spriteInstId ) spriteInstId = 1ULL;
+
+	R_SetupSpriteBlendState( &blendExt, &identExt, &rasterState, spriteInstId, e->curstate.rendermode );
+
+	// Setup sprite color tint & alpha from curstate
+	color24 c = e->curstate.rendercolor;
+	if( !c.r && !c.g && !c.b ) { c.r = c.g = c.b = 255; } // Protect against Hammer 0 0 0 bug
+	uint8_t a = (uint8_t)bound( 0, (int)( tr.blend * 255.0f ), 255 );
+	blendExt.tFactor = ( (uint32_t)a << 24 ) | ( (uint32_t)c.r << 16 ) | ( (uint32_t)c.g << 8 ) | (uint32_t)c.b;
+	blendExt.textureColorArg2Source = 3; // Factor
+	blendExt.textureAlphaArg2Source = 3; // Factor
+
+	// Retrieve frame texture material
+	remixapi_MaterialHandle mat = R_Textures_GetMaterial( (unsigned int)frame->gl_texturenum );
+	if( !mat ) mat = R_GetSpriteMaterial( 0 );
+
+	// Additive glows go to the path tracer as self-illuminated emitters (see R_Textures_CreateFx)
+	int rendermode = e->curstate.rendermode;
+	remixapi_MaterialHandle fxMat = NULL;
+	if( rendermode == kRenderTransAdd || rendermode == kRenderGlow )
+		fxMat = R_Textures_GetFxMaterial( (unsigned int)frame->gl_texturenum );
+
+	if( fxMat )
+	{
+		mat = fxMat;
+		R_SetupSpriteBlendState( &blendExt, &identExt, &rasterState, spriteInstId, kRenderTransAlpha );
+		identExt.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT;
+
+		// Move additive intensity from colour into coverage
+		uint32_t m = Q_max( c.r, Q_max( c.g, c.b ) );
+		uint32_t fa = (uint32_t)a * m / 255;
+		blendExt.tFactor = ( fa << 24 ) | ( ( (uint32_t)c.r * 255 / m ) << 16 ) | ( ( (uint32_t)c.g * 255 / m ) << 8 ) | ( (uint32_t)c.b * 255 / m );
+		blendExt.textureColorArg2Source = 3; // Factor
+		blendExt.textureAlphaArg2Source = 3; // Factor
+	}
+
+	remixapi_InstanceInfoMaterialEXT matExt;
+	memset( &matExt, 0, sizeof( matExt ) );
+	matExt.sType    = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_MATERIAL_EXT;
+	matExt.pNext    = &identExt;
+	matExt.material = mat;
 
 	// 5. Submit Instance to OpenRemix
 	remixapi_InstanceInfo inst;
 	memset( &inst, 0, sizeof( inst ) );
 	inst.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
-	inst.pNext         = &spriteExt;
+	inst.pNext         = &matExt;
 	inst.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE;
 	inst.mesh          = g_unitQuadMesh;
 	inst.transform     = transform;
@@ -483,7 +556,7 @@ static void R_DrawSegs( const vec3_t source, const vec3_t delta, float width, fl
                         float freq, float speed, int segments, int flags,
                         float r, float g, float b, float brightness )
 {
-	if( segments < 2 || !g_remix.CreateMesh || !g_remix.DrawInstance )
+	if( segments < 2 )
 		return;
 
 	if( segments > NOISE_DIVISIONS )
@@ -503,21 +576,12 @@ static void R_DrawSegs( const vec3_t source, const vec3_t delta, float width, fl
 	vec3_t perp1;
 	R_BeamComputeNormal( source, delta, perp1 );
 
-	// Build dynamic vertices and indices
-	uint32_t vertCount = (uint32_t)segments * 2;
-	uint32_t indexCount = (uint32_t)( segments - 1 ) * 6;
-
-	remixapi_HardcodedVertex verts[NOISE_DIVISIONS * 2];
-	uint32_t indices[NOISE_DIVISIONS * 6];
-	memset( verts, 0, sizeof( verts ) );
-
 	vec3_t curSegPos, nextSegPos, vNormal, vPoint1, vPoint2;
 	VectorCopy( source, curSegPos );
 
-	uint32_t packedColor = ( (uint32_t)bound( 0, (int)( brightness * 255.0f ), 255 ) << 24 ) |
-	                       ( (uint32_t)bound( 0, (int)( b * brightness * 255.0f ), 255 ) << 16 ) |
-	                       ( (uint32_t)bound( 0, (int)( g * brightness * 255.0f ), 255 ) << 8 ) |
-	                       (uint32_t)bound( 0, (int)( r * brightness * 255.0f ), 255 );
+	R_UI_TriRenderMode( kRenderTransAdd );
+	R_UI_TriColor4f( r, g, b, brightness );
+	R_UI_TriBegin( TRI_TRIANGLE_STRIP );
 
 	for( int i = 0; i < segments; i++ )
 	{
@@ -544,100 +608,287 @@ static void R_DrawSegs( const vec3_t source, const vec3_t delta, float width, fl
 		VectorMA( nextSegPos, ( width * 0.5f ), vNormal, vPoint1 );
 		VectorMA( nextSegPos, ( -width * 0.5f ), vNormal, vPoint2 );
 
-		// Vertex 2*i + 0
-		VectorCopy( vPoint1, verts[i * 2 + 0].position );
-		VectorCopy( vNormal, verts[i * 2 + 0].normal );
-		verts[i * 2 + 0].texcoord[0] = 0.0f;
-		verts[i * 2 + 0].texcoord[1] = vLast;
-		verts[i * 2 + 0].color       = packedColor;
+		R_UI_TriBrightness( 1.0f );
+		R_UI_TriTexCoord2f( 0.0f, vLast );
+		R_UI_TriVertex3fv( vPoint1 );
 
-		// Vertex 2*i + 1
-		VectorCopy( vPoint2, verts[i * 2 + 1].position );
-		VectorCopy( vNormal, verts[i * 2 + 1].normal );
-		verts[i * 2 + 1].texcoord[0] = 1.0f;
-		verts[i * 2 + 1].texcoord[1] = vLast;
-		verts[i * 2 + 1].color       = packedColor;
+		R_UI_TriBrightness( 1.0f );
+		R_UI_TriTexCoord2f( 1.0f, vLast );
+		R_UI_TriVertex3fv( vPoint2 );
 
 		VectorCopy( nextSegPos, curSegPos );
 		vLast += vStep;
 		noiseIndex += noiseStep;
 	}
 
-	// Triangulate strip into triangle indices
-	for( int i = 0; i < segments - 1; i++ )
+	R_UI_TriEnd();
+}
+
+/*
+ * Draw Beam Disk
+ */
+static void R_DrawDisk( const vec3_t source, const vec3_t delta, float width, float scale, float freq, float speed, int segments )
+{
+	if( segments < 2 ) return;
+	if( segments > NOISE_DIVISIONS ) segments = NOISE_DIVISIONS;
+
+	float length = VectorLength( delta ) * 0.01f;
+	if( length < 0.5f ) length = 0.5f;
+
+	float div = 1.0f / (float)( segments - 1 );
+	float vStep = length * div;
+	float vLast = fmodf( freq * speed, 1.0f );
+	(void)scale;
+
+	float w = fmodf( freq, width * 0.1f ) * delta[2];
+
+	for( int i = 0; i < segments; i++ )
 	{
-		uint32_t i0 = (uint32_t)i * 2 + 0;
-		uint32_t i1 = (uint32_t)i * 2 + 1;
-		uint32_t i2 = (uint32_t)( i + 1 ) * 2 + 0;
-		uint32_t i3 = (uint32_t)( i + 1 ) * 2 + 1;
+		float fraction = (float)i * div;
+		float s = sinf( fraction * M_PI2_F );
+		float c = cosf( fraction * M_PI2_F );
 
-		indices[i * 6 + 0] = i0;
-		indices[i * 6 + 1] = i1;
-		indices[i * 6 + 2] = i2;
-		indices[i * 6 + 3] = i1;
-		indices[i * 6 + 4] = i3;
-		indices[i * 6 + 5] = i2;
+		vec3_t point;
+		VectorCopy( source, point );
+
+		R_UI_TriBrightness( 1.0f );
+		R_UI_TriTexCoord2f( 1.0f, vLast );
+		R_UI_TriVertex3fv( point );
+
+		point[0] = s * w + source[0];
+		point[1] = c * w + source[1];
+		point[2] = source[2];
+
+		R_UI_TriBrightness( 1.0f );
+		R_UI_TriTexCoord2f( 0.0f, vLast );
+		R_UI_TriVertex3fv( point );
+
+		vLast += vStep;
 	}
+}
 
-	// Allocate dynamic mesh slot
-	dynamic_mesh_slot_t *slot = R_AllocDynamicMeshSlot();
-	if( slot->handle && g_remix.DestroyMesh )
+/*
+ * Draw Beam Cylinder
+ */
+static void R_DrawCylinder( const vec3_t source, const vec3_t delta, float width, float scale, float freq, float speed, int segments )
+{
+	if( segments < 2 ) return;
+	if( segments > NOISE_DIVISIONS ) segments = NOISE_DIVISIONS;
+
+	float length = VectorLength( delta ) * 0.01f;
+	if( length < 0.5f ) length = 0.5f;
+
+	float div = 1.0f / (float)( segments - 1 );
+	float vStep = length * div;
+	float vLast = fmodf( freq * speed, 1.0f );
+	(void)scale;
+
+	for( int i = 0; i < segments; i++ )
 	{
-		g_remix.DestroyMesh( slot->handle );
-		slot->handle = NULL;
+		float fraction = (float)i * div;
+		float s = sinf( fraction * M_PI2_F );
+		float c = cosf( fraction * M_PI2_F );
+
+		vec3_t point;
+		point[0] = s * freq * delta[2] + source[0];
+		point[1] = c * freq * delta[2] + source[1];
+		point[2] = source[2] + width;
+
+		R_UI_TriBrightness( 0.0f );
+		R_UI_TriTexCoord2f( 1.0f, vLast );
+		R_UI_TriVertex3fv( point );
+
+		point[0] = s * freq * ( delta[2] + width ) + source[0];
+		point[1] = c * freq * ( delta[2] + width ) + source[1];
+		point[2] = source[2] - width;
+
+		R_UI_TriBrightness( 1.0f );
+		R_UI_TriTexCoord2f( 0.0f, vLast );
+		R_UI_TriVertex3fv( point );
+
+		vLast += vStep;
 	}
+}
 
-	remixapi_MeshInfoSurfaceTriangles surface;
-	memset( &surface, 0, sizeof( surface ) );
-	surface.vertices_values   = verts;
-	surface.vertices_count    = vertCount;
-	surface.indices_values    = indices;
-	surface.indices_count     = indexCount;
-	surface.skinning_hasvalue = 0;
-	surface.material          = R_GetSpriteMaterial( 0 );
+/*
+ * Draw Beam Ring
+ */
+static void R_DrawRing( const vec3_t source, const vec3_t delta, float width, float amplitude, float freq, float speed, int segments )
+{
+	if( segments < 2 ) return;
 
-	remixapi_MeshInfo meshInfo;
-	memset( &meshInfo, 0, sizeof( meshInfo ) );
-	meshInfo.sType           = REMIXAPI_STRUCT_TYPE_MESH_INFO;
-	meshInfo.hash            = slot->hash;
-	meshInfo.surfaces_values = &surface;
-	meshInfo.surfaces_count  = 1;
+	segments = (int)( (float)segments * M_PI_F );
+	if( segments > NOISE_DIVISIONS * 8 ) segments = NOISE_DIVISIONS * 8;
 
-	remixapi_ErrorCode err = g_remix.CreateMesh( &meshInfo, &slot->handle );
-	if( err != REMIXAPI_ERROR_CODE_SUCCESS || !slot->handle )
-		return;
+	float length = VectorLength( delta ) * 0.01f * M_PI_F;
+	if( length < 0.5f ) length = 0.5f;
 
-	// Submit Instance with Additive Blend and BEAM category
-	remixapi_InstanceInfoBlendEXT blendExt;
-	remixapi_InstanceIdentityEXT identExt;
-	remixapi_InstanceInfoSpriteEXT spriteExt;
-	R_SetupSpriteBlendState( &blendExt, &identExt, &spriteExt, kRenderTransAdd );
+	float div = 1.0f / (float)( segments - 1 );
+	float vStep = length * div / 8.0f;
+	float vLast = fmodf( freq * speed, 1.0f );
+	float scale = amplitude * length / 8.0f;
 
-	remixapi_Transform identityTransform;
-	memset( &identityTransform, 0, sizeof( identityTransform ) );
-	identityTransform.matrix[0][0] = 1.0f;
-	identityTransform.matrix[1][1] = 1.0f;
-	identityTransform.matrix[2][2] = 1.0f;
+	int noiseStep = (int)( (float)( NOISE_DIVISIONS - 1 ) * div * 65536.0f ) * 8;
+	int noiseIndex = 0;
 
-	remixapi_InstanceInfo inst;
-	memset( &inst, 0, sizeof( inst ) );
-	inst.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
-	inst.pNext         = &spriteExt;
-	inst.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_BEAM;
-	inst.mesh          = slot->handle;
-	inst.transform     = identityTransform;
-	inst.doubleSided   = 1;
+	vec3_t halfDelta;
+	VectorScale( delta, 0.5f, halfDelta );
+	vec3_t center;
+	VectorAdd( source, halfDelta, center );
 
-	g_remix.DrawInstance( &inst );
+	vec3_t xaxis;
+	VectorCopy( halfDelta, xaxis );
+	float radius = VectorLength( xaxis );
+	if( radius < 0.1f ) return;
+
+	vec3_t yaxis;
+	yaxis[0] = xaxis[1];
+	yaxis[1] = -xaxis[0];
+	yaxis[2] = 0.0f;
+	VectorNormalize( yaxis );
+	VectorScale( yaxis, radius, yaxis );
+
+	vec3_t screenLast = { 0 };
+
+	for( int i = 0; i < segments + 1; i++ )
+	{
+		float fraction = (float)i * div;
+		float x = sinf( fraction * M_PI2_F );
+		float y = cosf( fraction * M_PI2_F );
+
+		vec3_t point;
+		point[0] = center[0] + xaxis[0] * x + yaxis[0] * y;
+		point[1] = center[1] + xaxis[1] * x + yaxis[1] * y;
+		point[2] = center[2] + xaxis[2] * x + yaxis[2] * y;
+
+		float factor = rgNoise[( noiseIndex >> 16 ) & ( NOISE_DIVISIONS - 1 )] * scale;
+		VectorMA( point, factor, RI.vup, point );
+		factor *= cosf( fraction * M_PI_F * 24.0f + freq );
+		VectorMA( point, factor, RI.vright, point );
+
+		vec3_t screen;
+		R_UI_TriWorldToScreen( point, screen );
+
+		if( i != 0 )
+		{
+			vec3_t tmp, normal;
+			VectorSubtract( screen, screenLast, tmp );
+			tmp[2] = 0.0f;
+			VectorNormalize( tmp );
+
+			VectorScale( RI.vup, tmp[0], normal );
+			VectorMA( normal, tmp[1], RI.vright, normal );
+
+			vec3_t p1, p2;
+			VectorMA( point, width, normal, p1 );
+			VectorMA( point, -width, normal, p2 );
+
+			vLast += vStep;
+			R_UI_TriTexCoord2f( 1.0f, vLast );
+			R_UI_TriVertex3fv( p2 );
+			R_UI_TriTexCoord2f( 0.0f, vLast );
+			R_UI_TriVertex3fv( p1 );
+		}
+
+		VectorCopy( screen, screenLast );
+		noiseIndex += noiseStep;
+	}
 }
 
 /*
  * Draw single beam
  */
+/*
+ * R_BeamComputePoint - Attachment point (or origin) of a beam's start/end entity
+ */
+static qboolean R_BeamComputePoint( int beamEnt, vec3_t pt )
+{
+	cl_entity_t *ent = gEngfuncs.R_BeamGetEntity( beamEnt );
+	int attach = BEAMENT_ATTACHMENT( beamEnt < 0 ? -beamEnt : beamEnt );
+
+	if( !ent )
+	{
+		VectorClear( pt );
+		return false;
+	}
+
+	if( attach > 0 )
+		VectorCopy( ent->attachment[attach - 1], pt );
+	else if( gp_cl && ent->index == ( gp_cl->playernum + 1 ) )
+		VectorCopy( gp_cl->simorg, pt );
+	else
+		VectorCopy( ent->origin, pt );
+
+	return true;
+}
+
+/*
+ * R_BeamRecomputeEndpoints - Follow the entities a beam is attached to
+ */
+static qboolean R_BeamRecomputeEndpoints( BEAM *pbeam )
+{
+	if( FBitSet( pbeam->flags, FBEAM_STARTENTITY ) )
+	{
+		cl_entity_t *start = gEngfuncs.R_BeamGetEntity( pbeam->startEntity );
+		if( R_BeamComputePoint( pbeam->startEntity, pbeam->source ) )
+		{
+			if( !pbeam->pFollowModel )
+				pbeam->pFollowModel = start->model;
+			SetBits( pbeam->flags, FBEAM_STARTVISIBLE );
+		}
+		else if( !FBitSet( pbeam->flags, FBEAM_FOREVER ) )
+		{
+			ClearBits( pbeam->flags, FBEAM_STARTENTITY );
+		}
+	}
+
+	if( FBitSet( pbeam->flags, FBEAM_ENDENTITY ) )
+	{
+		cl_entity_t *end = gEngfuncs.R_BeamGetEntity( pbeam->endEntity );
+		if( R_BeamComputePoint( pbeam->endEntity, pbeam->target ) )
+		{
+			if( !pbeam->pFollowModel )
+				pbeam->pFollowModel = end->model;
+			SetBits( pbeam->flags, FBEAM_ENDVISIBLE );
+		}
+		else
+		{
+			if( !FBitSet( pbeam->flags, FBEAM_FOREVER ) )
+			{
+				ClearBits( pbeam->flags, FBEAM_ENDENTITY );
+				if( gp_cl ) pbeam->die = gp_cl->time;
+			}
+			return false;
+		}
+	}
+
+	if( FBitSet( pbeam->flags, FBEAM_STARTENTITY ) && !FBitSet( pbeam->flags, FBEAM_STARTVISIBLE ) )
+		return false;
+	return true;
+}
+
 void R_BeamDraw( BEAM *pbeam, float frametime )
 {
-	if( !pbeam || !FBitSet( pbeam->flags, FBEAM_ISACTIVE ) )
+	if( !pbeam )
 		return;
+
+	// Every beam reaching here is drawn (the engine frees dead ones), as in the GL renderer
+	SetBits( pbeam->flags, FBEAM_ISACTIVE );
+
+	if( FBitSet( pbeam->flags, FBEAM_STARTENTITY | FBEAM_ENDENTITY ) )
+	{
+		if( !R_BeamRecomputeEndpoints( pbeam ) )
+		{
+			ClearBits( pbeam->flags, FBEAM_ISACTIVE );
+			return;
+		}
+
+		VectorSubtract( pbeam->target, pbeam->source, pbeam->delta );
+		if( pbeam->amplitude >= 0.50f )
+			pbeam->segments = VectorLength( pbeam->delta ) * 0.25f + 3.0f;
+		else
+			pbeam->segments = VectorLength( pbeam->delta ) * 0.075f + 3.0f;
+	}
 
 	vec3_t delta;
 	VectorSubtract( pbeam->target, pbeam->source, delta );
@@ -667,9 +918,121 @@ void R_BeamDraw( BEAM *pbeam, float frametime )
 	int segments = (int)pbeam->segments;
 	if( segments < 2 ) segments = 2;
 
-	R_DrawSegs( pbeam->source, delta, pbeam->width, pbeam->amplitude,
-	            pbeam->freq, pbeam->speed, segments, pbeam->flags,
-	            pbeam->r, pbeam->g, pbeam->b, brightness );
+	model_t *model = CL_ModelHandle( pbeam->modelIndex );
+	if( !model || model->type != mod_sprite )
+		return;
+
+	double curtime = gp_cl ? gp_cl->time : tr.realtime;
+	int frameIdx = (int)( pbeam->frame + pbeam->frameRate * curtime ) % ( pbeam->frameCount ? pbeam->frameCount : 1 );
+	if( !R_UI_TriSpriteTexture( model, frameIdx ) )
+		return;
+
+	switch( pbeam->type )
+	{
+	case TE_BEAMDISK:
+		R_UI_TriRenderMode( kRenderTransAdd );
+		R_UI_TriColor4f( pbeam->r, pbeam->g, pbeam->b, brightness );
+		R_UI_TriBegin( TRI_TRIANGLE_STRIP );
+		R_DrawDisk( pbeam->source, delta, pbeam->width, pbeam->amplitude, pbeam->freq, pbeam->speed, segments );
+		R_UI_TriEnd();
+		break;
+
+	case TE_BEAMCYLINDER:
+		R_UI_TriRenderMode( kRenderTransAdd );
+		R_UI_TriColor4f( pbeam->r, pbeam->g, pbeam->b, brightness );
+		R_UI_TriBegin( TRI_TRIANGLE_STRIP );
+		R_DrawCylinder( pbeam->source, delta, pbeam->width, pbeam->amplitude, pbeam->freq, pbeam->speed, segments );
+		R_UI_TriEnd();
+		break;
+
+	case TE_BEAMRING:
+		R_UI_TriRenderMode( kRenderTransAdd );
+		R_UI_TriColor4f( pbeam->r, pbeam->g, pbeam->b, brightness );
+		R_UI_TriBegin( TRI_TRIANGLE_STRIP );
+		R_DrawRing( pbeam->source, delta, pbeam->width, pbeam->amplitude, pbeam->freq, pbeam->speed, segments );
+		R_UI_TriEnd();
+		break;
+
+	case TE_BEAMPOINTS:
+	case TE_BEAMHOSE:
+	default:
+		R_DrawSegs( pbeam->source, delta, pbeam->width, pbeam->amplitude,
+		            pbeam->freq, pbeam->speed, segments, pbeam->flags,
+		            pbeam->r, pbeam->g, pbeam->b, brightness );
+		break;
+	}
+}
+
+/*
+ * R_BeamDrawCustomEntity - Build a beam from a server env_beam entity (ET_BEAM)
+ */
+static void R_BeamDrawCustomEntity( cl_entity_t *ent, float frametime )
+{
+	model_t *sprite = CL_ModelHandle( ent->curstate.modelindex );
+	if( !sprite )
+		return;
+
+	double cltime = gp_cl ? gp_cl->time : tr.realtime;
+	float amp = ent->curstate.body / 100.0f;
+
+	BEAM beam;
+	memset( &beam, 0, sizeof( beam ) );
+	beam.type       = TE_BEAMPOINTS;
+	beam.modelIndex = ent->curstate.modelindex;
+	beam.frameCount = sprite->numframes;
+	beam.frame      = (float)ent->curstate.frame;
+	beam.frameRate  = ent->curstate.framerate;
+	VectorCopy( ent->origin, beam.source );
+	VectorCopy( ent->curstate.angles, beam.target ); // server beams carry the end point in angles
+	VectorSubtract( beam.target, beam.source, beam.delta );
+	beam.speed      = ent->curstate.animtime;
+	beam.freq       = beam.speed * (float)cltime;
+	beam.die        = (float)cltime;
+	beam.amplitude  = amp;
+	beam.brightness = CL_FxBlend( ent ) / 255.0f;
+	beam.width      = ent->curstate.scale;
+	beam.r          = ent->curstate.rendercolor.r / 255.0f;
+	beam.g          = ent->curstate.rendercolor.g / 255.0f;
+	beam.b          = ent->curstate.rendercolor.b / 255.0f;
+	if( amp >= 0.50f )
+		beam.segments = VectorLength( beam.delta ) * 0.25f + 3.0f;
+	else
+		beam.segments = VectorLength( beam.delta ) * 0.075f + 3.0f;
+
+	switch( ent->curstate.rendermode & 0x0F )
+	{
+	case BEAM_ENTPOINT:
+		if( ent->curstate.sequence )
+		{
+			SetBits( beam.flags, FBEAM_STARTENTITY );
+			beam.startEntity = ent->curstate.sequence;
+		}
+		if( ent->curstate.skin )
+		{
+			SetBits( beam.flags, FBEAM_ENDENTITY );
+			beam.endEntity = ent->curstate.skin;
+		}
+		break;
+	case BEAM_ENTS:
+		SetBits( beam.flags, FBEAM_STARTENTITY | FBEAM_ENDENTITY );
+		beam.startEntity = ent->curstate.sequence;
+		beam.endEntity   = ent->curstate.skin;
+		break;
+	case BEAM_HOSE:
+		beam.type = TE_BEAMHOSE;
+		break;
+	case BEAM_POINTS:
+	default:
+		break;
+	}
+
+	int beamFlags = ent->curstate.rendermode & 0xF0;
+	if( FBitSet( beamFlags, BEAM_FSINE ) )     SetBits( beam.flags, FBEAM_SINENOISE );
+	if( FBitSet( beamFlags, BEAM_FSOLID ) )    SetBits( beam.flags, FBEAM_SOLID );
+	if( FBitSet( beamFlags, BEAM_FSHADEIN ) )  SetBits( beam.flags, FBEAM_SHADEIN );
+	if( FBitSet( beamFlags, BEAM_FSHADEOUT ) ) SetBits( beam.flags, FBEAM_SHADEOUT );
+
+	R_BeamDraw( &beam, frametime );
 }
 
 /*
@@ -677,13 +1040,21 @@ void R_BeamDraw( BEAM *pbeam, float frametime )
  */
 void CL_DrawBeams( int fTrans, BEAM *active_beams )
 {
-	(void)fTrans;
+	// CL_DrawEFX calls this for both the solid and transparent pass; beams are all additive,
+	// so draw them once to avoid submitting every beam twice per frame
+	if( !fTrans )
+		return;
+
+	float dt = (float)tr.frametime > 0.0f ? (float)tr.frametime : 0.016f;
+
+	// Server beams (env_beam): parameters live in the entity, no persistent beam chain
+	for( uint32_t i = 0; i < g_bspState.num_beam_entities; i++ )
+		R_BeamDrawCustomEntity( g_bspState.beam_entities[i], dt );
 
 	for( BEAM *pBeam = active_beams; pBeam; pBeam = pBeam->next )
-	{
-		float dt = (float)tr.frametime > 0.0f ? (float)tr.frametime : 0.016f;
 		R_BeamDraw( pBeam, dt );
-	}
+
+	R_UI_TriFlush();
 }
 
 /*
@@ -694,7 +1065,7 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 	if( !particles || !g_remix.CreateMesh || !g_remix.DrawInstance )
 		return;
 
-	// Count particles (up to 2048)
+	// Count particles (up to 2048 drawn; the rest are still simulated below)
 	uint32_t count = 0;
 	for( particle_t *p = particles; p && count < 2048; p = p->next )
 	{
@@ -703,7 +1074,14 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 	}
 
 	if( count == 0 )
+	{
+		for( particle_t *p = particles; p; p = p->next )
+		{
+			if( gEngfuncs.CL_ThinkParticle )
+				gEngfuncs.CL_ThinkParticle( frametime, p );
+		}
 		return;
+	}
 
 	uint32_t vertCount  = count * 4;
 	uint32_t indexCount = count * 6;
@@ -717,10 +1095,14 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 		return;
 	}
 
+	// Particle quads face the camera, so give the path tracer a valid normal (zeroed normals produce NaNs)
+	vec3_t facing;
+	VectorNegate( RI.vforward, facing );
+
 	uint32_t cur = 0;
-	for( particle_t *p = particles; p && cur < count; p = p->next )
+	for( particle_t *p = particles; p; p = p->next )
 	{
-		if( p->type == pt_blob && p->unused != 255 )
+		if( cur >= count || ( p->type == pt_blob && p->unused != 255 ) )
 		{
 			if( gEngfuncs.CL_ThinkParticle )
 				gEngfuncs.CL_ThinkParticle( frametime, p );
@@ -747,7 +1129,7 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 		if( alpha > 255 || p->type == pt_static ) alpha = 255;
 		if( alpha < 0 ) alpha = 0;
 
-		uint32_t packedColor = ( (uint32_t)alpha << 24 ) | ( (uint32_t)col.b << 16 ) | ( (uint32_t)col.g << 8 ) | (uint32_t)col.r;
+		uint32_t packedColor = ( (uint32_t)alpha << 24 ) | ( (uint32_t)col.r << 16 ) | ( (uint32_t)col.g << 8 ) | (uint32_t)col.b;
 
 		uint32_t vBase = cur * 4;
 		uint32_t iBase = cur * 6;
@@ -761,13 +1143,16 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 		verts[vBase + 1].texcoord[0] = 0.0f; verts[vBase + 1].texcoord[1] = 0.0f;
 		verts[vBase + 1].color       = packedColor;
 
-		VectorSet( verts[vBase + 2].position, p->org[0] + right[0] - up[0], p->org[1] - right[1] - up[1], p->org[2] - right[2] - up[2] );
+		VectorSet( verts[vBase + 2].position, p->org[0] + right[0] - up[0], p->org[1] + right[1] - up[1], p->org[2] + right[2] - up[2] );
 		verts[vBase + 2].texcoord[0] = 1.0f; verts[vBase + 2].texcoord[1] = 0.0f;
 		verts[vBase + 2].color       = packedColor;
 
 		VectorSet( verts[vBase + 3].position, p->org[0] - right[0] - up[0], p->org[1] - right[1] - up[1], p->org[2] - right[2] - up[2] );
 		verts[vBase + 3].texcoord[0] = 1.0f; verts[vBase + 3].texcoord[1] = 1.0f;
 		verts[vBase + 3].color       = packedColor;
+
+		for( int k = 0; k < 4; k++ )
+			VectorCopy( facing, verts[vBase + k].normal );
 
 		indices[iBase + 0] = vBase + 0;
 		indices[iBase + 1] = vBase + 1;
@@ -788,6 +1173,11 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 		slot->handle = NULL;
 	}
 
+	// Cache the lookup: R_Textures_Find scans the whole texture table
+	if( tr.particleTexture <= 0 )
+		tr.particleTexture = R_Textures_Find( REF_PARTICLE_TEXTURE );
+	int partTex = tr.particleTexture;
+
 	remixapi_MeshInfoSurfaceTriangles surface;
 	memset( &surface, 0, sizeof( surface ) );
 	surface.vertices_values   = verts;
@@ -795,7 +1185,7 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 	surface.indices_values    = indices;
 	surface.indices_count     = indexCount;
 	surface.skinning_hasvalue = 0;
-	surface.material          = R_GetSpriteMaterial( 0 );
+	surface.material          = R_GetSpriteMaterial( partTex );
 
 	remixapi_MeshInfo meshInfo;
 	memset( &meshInfo, 0, sizeof( meshInfo ) );
@@ -807,10 +1197,10 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 	remixapi_ErrorCode err = g_remix.CreateMesh( &meshInfo, &slot->handle );
 	if( err == REMIXAPI_ERROR_CODE_SUCCESS && slot->handle )
 	{
+		remixapi_InstanceRasterStateEXT rasterState;
 		remixapi_InstanceInfoBlendEXT blendExt;
 		remixapi_InstanceIdentityEXT identExt;
-		remixapi_InstanceInfoSpriteEXT spriteExt;
-		R_SetupSpriteBlendState( &blendExt, &identExt, &spriteExt, kRenderTransAlpha );
+		R_SetupSpriteBlendState( &blendExt, &identExt, &rasterState, slot->hash, kRenderTransAlpha );
 
 		remixapi_Transform identityTransform;
 		memset( &identityTransform, 0, sizeof( identityTransform ) );
@@ -821,7 +1211,7 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 		remixapi_InstanceInfo inst;
 		memset( &inst, 0, sizeof( inst ) );
 		inst.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
-		inst.pNext         = &spriteExt;
+		inst.pNext         = &identExt;
 		inst.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE;
 		inst.mesh          = slot->handle;
 		inst.transform     = identityTransform;
@@ -834,11 +1224,116 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 	Mem_Free( indices );
 }
 
+// Tracer widths per particle type and built-in colours (index 4 follows the tracer* cvars)
+static float   gTracerSize[11] = { 1.5f, 0.5f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+static color24 gTracerColors[] =
+{
+	{ 255, 255, 255 }, // White
+	{ 255, 0, 0 },     // Red
+	{ 0, 255, 0 },     // Green
+	{ 0, 0, 255 },     // Blue
+	{ 0, 0, 0 },       // Tracer default, filled in from cvars
+	{ 255, 167, 17 },  // Yellow-orange sparks
+	{ 255, 130, 90 },  // Yellowish streaks (garg)
+	{ 55, 60, 144 },   // Blue egon streak
+	{ 255, 130, 90 },  // More yellowish streaks (garg)
+	{ 255, 140, 90 },  // More yellowish streaks (garg)
+	{ 200, 130, 90 },  // More red streaks (garg)
+	{ 255, 120, 70 },  // Darker red streaks (garg)
+};
+
 /*
- * CL_DrawTracers - Draw gunshot tracers
+ * CL_DrawTracers - Draw and simulate tracers and spark streaks (port of the GL renderer's)
  */
 void CL_DrawTracers( double frametime, particle_t *tracers )
 {
-	(void)frametime;
-	(void)tracers;
+	if( tracerred && tracergreen && tracerblue && traceralpha &&
+	    FBitSet( tracerred->flags | tracergreen->flags | tracerblue->flags | traceralpha->flags, FCVAR_CHANGED ) )
+	{
+		color24 *custom = &gTracerColors[TRACER_COLORINDEX_DEFAULT];
+		custom->r = (byte)( tracerred->value * traceralpha->value * 255 );
+		custom->g = (byte)( tracergreen->value * traceralpha->value * 255 );
+		custom->b = (byte)( tracerblue->value * traceralpha->value * 255 );
+		ClearBits( tracerred->flags, FCVAR_CHANGED );
+		ClearBits( tracergreen->flags, FCVAR_CHANGED );
+		ClearBits( tracerblue->flags, FCVAR_CHANGED );
+		ClearBits( traceralpha->flags, FCVAR_CHANGED );
+	}
+
+	if( !tracers || !gp_cl || !gp_movevars )
+		return;
+
+	// Additive dot sprite: goes to the path tracer as a self-illuminated streak
+	if( !R_UI_TriSpriteTexture( gEngfuncs.GetDefaultSprite( REF_DOT_SPRITE ), 0 ) )
+		return;
+
+	float gravity = (float)frametime * gp_movevars->gravity;
+	float scale = 1.0f - (float)frametime * 0.9f;
+	if( scale < 0.0f ) scale = 0.0f;
+
+	R_UI_TriRenderMode( kRenderTransAdd );
+
+	for( particle_t *p = tracers; p; p = p->next )
+	{
+		float atten = p->die - (float)gp_cl->time;
+		if( atten > 0.1f ) atten = 0.1f;
+
+		vec3_t start, end, delta;
+		VectorScale( p->vel, ( p->ramp * atten ), delta );
+		VectorAdd( p->org, delta, end );
+		VectorCopy( p->org, start );
+
+		int type = bound( 0, (int)p->type, (int)( ARRAYSIZE( gTracerSize ) - 1 ) );
+
+		vec3_t screen, screenLast;
+		if( !R_UI_TriWorldToScreen( start, screen ) && !R_UI_TriWorldToScreen( end, screenLast ) )
+		{
+			// Width perpendicular to the streak's screen-space direction
+			vec3_t tmp, tmp2, normal, verts[4];
+			VectorSubtract( screen, screenLast, tmp );
+			tmp[2] = 0.0f;
+			VectorNormalize( tmp );
+
+			VectorScale( RI.vup, tmp[0] * gTracerSize[type], normal );
+			VectorScale( RI.vright, -tmp[1] * gTracerSize[type], tmp2 );
+			VectorSubtract( normal, tmp2, normal );
+
+			VectorSubtract( start, normal, verts[0] );
+			VectorAdd( start, normal, verts[1] );
+			VectorAdd( verts[0], delta, verts[2] );
+			VectorAdd( verts[1], delta, verts[3] );
+
+			if( p->color < 0 || p->color >= (int)ARRAYSIZE( gTracerColors ) )
+				p->color = TRACER_COLORINDEX_DEFAULT;
+
+			color24 color = gTracerColors[p->color];
+			R_UI_TriColor4ub( color.r, color.g, color.b, (byte)bound( 0, p->unused, 255 ) );
+
+			R_UI_TriBegin( TRI_QUADS );
+			R_UI_TriTexCoord2f( 0.0f, 0.8f ); R_UI_TriVertex3fv( verts[2] );
+			R_UI_TriTexCoord2f( 1.0f, 0.8f ); R_UI_TriVertex3fv( verts[3] );
+			R_UI_TriTexCoord2f( 1.0f, 0.0f ); R_UI_TriVertex3fv( verts[1] );
+			R_UI_TriTexCoord2f( 0.0f, 0.0f ); R_UI_TriVertex3fv( verts[0] );
+			R_UI_TriEnd();
+		}
+
+		// Evaluate position
+		VectorMA( p->org, (float)frametime, p->vel, p->org );
+
+		if( p->type == pt_grav )
+		{
+			p->vel[0] *= scale;
+			p->vel[1] *= scale;
+			p->vel[2] -= gravity;
+
+			int a = (int)( 255.0f * ( p->die - (float)gp_cl->time ) * 2.0f );
+			p->unused = (short)bound( 0, a, 255 );
+		}
+		else if( p->type == pt_slowgrav )
+		{
+			p->vel[2] = gravity * 0.05f;
+		}
+	}
+
+	R_UI_TriFlush();
 }

@@ -27,10 +27,18 @@ typedef struct remix_texture_s
 	uint64_t                matHash;
 	remixapi_MaterialHandle matHandle;
 
+	// Additive sprite variant: alpha = brightness, self-illuminated (beams, glows)
+	remixapi_TextureHandle  fxTexHandle;
+	remixapi_MaterialHandle fxMatHandle;
+
+	// Self-illuminated material on the original texture (additive brushes), created on demand
+	remixapi_MaterialHandle emisMatHandle;
+
 	qboolean                registered;
 	qboolean                isCutout;
 	qboolean                isWater;
 	qboolean                isTranslucent;
+	qboolean                isGlass;
 	qboolean                isSky;
 } remix_texture_t;
 
@@ -40,9 +48,15 @@ void                    R_Textures_Init( void );
 void                    R_Textures_Shutdown( void );
 void                    R_Textures_ClearMap( void );
 
+qboolean                R_Textures_IsGlass( const char *name );
+remixapi_MaterialHandle R_Textures_GetGlassMaterial( void );
+qboolean                R_Textures_GlassTextured( void );
+float                   R_Textures_GlassOpacity( void );
 int                     R_Textures_Find( const char *name );
 const char             *R_Textures_GetName( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum );
+remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum );
+remixapi_MaterialHandle R_Textures_GetEmissiveMaterial( unsigned int texnum );
 
 // Engine ref_interface_t hooks
 int                     GL_LoadTexture_Hook( const char *name, const byte *buf, size_t size, int flags );

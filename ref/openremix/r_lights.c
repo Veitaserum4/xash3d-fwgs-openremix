@@ -15,6 +15,8 @@ static cvar_t *rt_sun_diameter     = NULL;
 static cvar_t *rt_flsh             = NULL;
 static cvar_t *rt_flsh_radius      = NULL;
 static cvar_t *rt_flsh_angle       = NULL;
+static cvar_t *rt_flsh_r           = NULL;
+static cvar_t *rt_flsh_u           = NULL;
 static cvar_t *rt_light_s          = NULL;
 static cvar_t *rt_light_d          = NULL;
 static cvar_t *rt_light_radius     = NULL;
@@ -71,6 +73,8 @@ void R_Lights_Init( void )
 		rt_flsh            = gEngfuncs.Cvar_Get( "rt_flsh", "800", FCVAR_ARCHIVE, "Player flashlight intensity" );
 		rt_flsh_radius     = gEngfuncs.Cvar_Get( "rt_flsh_radius", "2.0", FCVAR_ARCHIVE, "Player flashlight source radius" );
 		rt_flsh_angle      = gEngfuncs.Cvar_Get( "rt_flsh_angle", "25", FCVAR_ARCHIVE, "Player flashlight outer cone angle in degrees" );
+		rt_flsh_r          = gEngfuncs.Cvar_Get( "rt_flsh_r", "2.5", FCVAR_ARCHIVE, "Player flashlight right offset" );
+		rt_flsh_u          = gEngfuncs.Cvar_Get( "rt_flsh_u", "-2.5", FCVAR_ARCHIVE, "Player flashlight up offset" );
 		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "1000", FCVAR_ARCHIVE, "Map static light intensity scale" );
 		rt_light_d         = gEngfuncs.Cvar_Get( "rt_light_d", "1000", FCVAR_ARCHIVE, "Dynamic lights (explosions/projectiles) intensity scale" );
 		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
@@ -483,6 +487,119 @@ void R_Lights_NewMap( const char *entities )
 
 /*
 ====================
+R_Lights_SubmitFlashlight
+====================
+*/
+static void R_Lights_SubmitFlashlight( void )
+{
+	if( !g_remix.CreateLight )
+		return;
+
+	float flsh_intensity = ( rt_flsh ? rt_flsh->value : 800.0f );
+	if( flsh_intensity <= 0.0f ) flsh_intensity = 800.0f;
+
+	float src_radius = ( rt_flsh_radius ? rt_flsh_radius->value : 2.0f );
+	if( src_radius < 0.1f ) src_radius = 2.0f;
+
+	float cone_angle = ( rt_flsh_angle ? rt_flsh_angle->value : 25.0f );
+	if( cone_angle < 5.0f ) cone_angle = 25.0f;
+
+	float offset_r = ( rt_flsh_r ? rt_flsh_r->value : 2.5f );
+	float offset_u = ( rt_flsh_u ? rt_flsh_u->value : -2.5f );
+
+	// Calculate flashlight origin: chest/shoulder mounted, slightly forward of eye position
+	vec3_t origin;
+	VectorCopy( RI.vieworg, origin );
+	VectorMA( origin, 3.0f, RI.vforward, origin );
+	VectorMA( origin, offset_r, RI.vright, origin );
+	VectorMA( origin, offset_u, RI.vup, origin );
+
+	remixapi_LightInfoSphereEXT sphereExt;
+	memset( &sphereExt, 0, sizeof( sphereExt ) );
+	sphereExt.sType                   = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+	sphereExt.pNext                   = NULL;
+	sphereExt.position.x             = origin[0];
+	sphereExt.position.y             = origin[1];
+	sphereExt.position.z             = origin[2];
+	sphereExt.radius                  = src_radius;
+	sphereExt.volumetricRadianceScale = 1.5f;
+
+	sphereExt.shaping_hasvalue               = 1;
+	sphereExt.shaping_value.direction.x      = RI.vforward[0];
+	sphereExt.shaping_value.direction.y      = RI.vforward[1];
+	sphereExt.shaping_value.direction.z      = RI.vforward[2];
+	sphereExt.shaping_value.coneAngleDegrees = cone_angle;
+	sphereExt.shaping_value.coneSoftness     = 0.35f;
+	sphereExt.shaping_value.focusExponent    = 1.0f;
+
+	remixapi_LightInfo lightInfo;
+	memset( &lightInfo, 0, sizeof( lightInfo ) );
+	lightInfo.sType     = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+	lightInfo.pNext     = &sphereExt;
+	lightInfo.hash      = 0xF1A541168700ULL; // "FLASHLGT"
+	// Crisp cool LED tint (220, 243, 255)
+	lightInfo.radiance.x = ( 220.0f / 255.0f ) * flsh_intensity;
+	lightInfo.radiance.y = ( 243.0f / 255.0f ) * flsh_intensity;
+	lightInfo.radiance.z = ( 255.0f / 255.0f ) * flsh_intensity;
+	lightInfo.isDynamic = 1;
+	lightInfo.ignoreViewModel = 0;
+
+	if( g_remix.CreateLight( &lightInfo, &g_lights.flashlight_handle ) == REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		if( g_remix.DrawLightInstance && g_lights.flashlight_handle )
+			g_remix.DrawLightInstance( g_lights.flashlight_handle );
+		g_lights.flashlight_active = true;
+	}
+}
+
+/*
+====================
+R_Lights_SubmitPointDlight
+====================
+*/
+static void R_Lights_SubmitPointDlight( const dlight_t *l, int index, float d_scale )
+{
+	if( !l || l->dark || l->radius <= 0.0f || index < 0 || index >= MAX_ACTIVE_DLIGHTS )
+		return;
+
+	// Scale intensity based on radius and color (GoldSrc dlights have radius ~ 80..300)
+	float falloff_mult = l->radius * 0.025f; // Quake to metric
+	if( falloff_mult < 1.0f ) falloff_mult = 1.0f;
+
+	remixapi_LightInfoSphereEXT sphereExt;
+	memset( &sphereExt, 0, sizeof( sphereExt ) );
+	sphereExt.sType                   = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+	sphereExt.pNext                   = NULL;
+	sphereExt.position.x             = l->origin[0];
+	sphereExt.position.y             = l->origin[1];
+	sphereExt.position.z             = l->origin[2];
+	sphereExt.radius                  = ( rt_light_radius ? rt_light_radius->value : 4.0f );
+	if( sphereExt.radius < 1.0f ) sphereExt.radius = 1.0f;
+	sphereExt.volumetricRadianceScale = 1.0f;
+	sphereExt.shaping_hasvalue        = 0;
+
+	remixapi_LightInfo lightInfo;
+	memset( &lightInfo, 0, sizeof( lightInfo ) );
+	lightInfo.sType     = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+	lightInfo.pNext     = &sphereExt;
+	lightInfo.hash      = 0x444C494748540000ULL | (uint64_t)( index & 0xFFFF ); // "DLIGHT" + index
+	lightInfo.radiance.x = ( (float)l->color.r / 255.0f ) * d_scale * falloff_mult;
+	lightInfo.radiance.y = ( (float)l->color.g / 255.0f ) * d_scale * falloff_mult;
+	lightInfo.radiance.z = ( (float)l->color.b / 255.0f ) * d_scale * falloff_mult;
+	lightInfo.isDynamic = 1;
+
+	if( g_remix.CreateLight )
+	{
+		if( g_remix.CreateLight( &lightInfo, &g_lights.dlight_handles[index] ) == REMIXAPI_ERROR_CODE_SUCCESS )
+		{
+			if( g_remix.DrawLightInstance && g_lights.dlight_handles[index] )
+				g_remix.DrawLightInstance( g_lights.dlight_handles[index] );
+		}
+	}
+}
+
+/*
+====================
 R_Lights_DrawFrame
 ====================
 */
@@ -508,90 +625,55 @@ void R_Lights_DrawFrame( void )
 	double curTime = ( gp_cl ? gp_cl->time : tr.realtime );
 	float d_scale = ( rt_light_d ? rt_light_d->value : 1000.0f );
 	int flsh_key = ( _rt_flsh_key ? (int)_rt_flsh_key->value : -1 );
+	int player_key = gp_cl ? ( gp_cl->playernum + 1 ) : 1;
 
-	// Player Flashlight tracking
-	qboolean flashFound = false;
+	qboolean flashlight_drawn = false;
 
+	// Engine dynamic lights: flashlight (key == local player index), muzzle flashes, explosions
+	if( gp_dlights )
+	{
+		for( int i = 0; i < R_OPENREMIX_MAX_DLIGHTS; i++ )
+		{
+			dlight_t *l = &gp_dlights[i];
+			if( l->die < curTime || l->radius <= 0.0f )
+				continue;
+
+			if( l->key == player_key || ( flsh_key != -1 && l->key == flsh_key ) )
+			{
+				R_Lights_SubmitFlashlight();
+				flashlight_drawn = true;
+				continue;
+			}
+
+			R_Lights_SubmitPointDlight( l, i, d_scale );
+		}
+	}
+
+	// Fallback/extra check: if flashlight was not in gp_dlights, check local player EF_DIMLIGHT
+	if( !flashlight_drawn )
+	{
+		cl_entity_t *player = CL_GetEntityByIndex( player_key );
+		if( player && ( player->curstate.effects & EF_DIMLIGHT ) )
+		{
+			R_Lights_SubmitFlashlight();
+			flashlight_drawn = true;
+		}
+		else
+		{
+			g_lights.flashlight_active = false;
+		}
+	}
+
+	// Entity lights (EF_DIMLIGHT/EF_BRIGHTLIGHT on studio models)
 	if( tr.elights )
 	{
-		for( int i = 0; i < MAX_ELIGHTS && i < MAX_ACTIVE_DLIGHTS; i++ )
+		for( int i = 0; i < MAX_ELIGHTS && R_OPENREMIX_MAX_DLIGHTS + i < MAX_ACTIVE_DLIGHTS; i++ )
 		{
 			dlight_t *l = &tr.elights[i];
-			if( !l || l->die < curTime || l->radius <= 0.0f )
+			if( l->die < curTime || l->radius <= 0.0f )
 				continue;
-
-			// Flashlight detection: matching key or standard player view entity
-			if( ( flsh_key != -1 && l->key == flsh_key ) || ( l->key == ( gp_cl ? gp_cl->playernum + 1 : 1 ) ) )
-			{
-				flashFound = true;
-				vec3_t flsh_pos;
-				VectorCopy( RI.vieworg, flsh_pos );
-				VectorMA( flsh_pos, -2.0f, RI.vup, flsh_pos );
-				VectorMA( flsh_pos, 2.0f, RI.vright, flsh_pos );
-
-				remixapi_LightInfoSphereEXT flshExt;
-				memset( &flshExt, 0, sizeof( flshExt ) );
-				flshExt.sType                   = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
-				flshExt.pNext                   = NULL;
-				flshExt.position.x             = flsh_pos[0];
-				flshExt.position.y             = flsh_pos[1];
-				flshExt.position.z             = flsh_pos[2];
-				flshExt.radius                  = ( rt_flsh_radius ? rt_flsh_radius->value : 2.0f );
-				flshExt.volumetricRadianceScale = 1.5f; // Pronounced flashlight beam in fog
-				flshExt.shaping_hasvalue        = 1;
-				flshExt.shaping_value.direction.x      = RI.vforward[0];
-				flshExt.shaping_value.direction.y      = RI.vforward[1];
-				flshExt.shaping_value.direction.z      = RI.vforward[2];
-				flshExt.shaping_value.coneAngleDegrees = ( rt_flsh_angle ? rt_flsh_angle->value : 25.0f );
-				flshExt.shaping_value.coneSoftness     = 0.3f;
-				flshExt.shaping_value.focusExponent    = 1.0f;
-
-				float flsh_intensity = ( rt_flsh ? rt_flsh->value : 800.0f );
-				remixapi_LightInfo flshInfo;
-				memset( &flshInfo, 0, sizeof( flshInfo ) );
-				flshInfo.sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
-				flshInfo.pNext      = &flshExt;
-				flshInfo.hash       = 0xF1A541168700ULL; // "FLASHLGT"
-				flshInfo.radiance.x = ( 220.0f / 255.0f ) * flsh_intensity;
-				flshInfo.radiance.y = ( 243.0f / 255.0f ) * flsh_intensity;
-				flshInfo.radiance.z = ( 255.0f / 255.0f ) * flsh_intensity;
-				flshInfo.isDynamic  = 1;
-
-				if( g_remix.CreateLight && g_remix.CreateLight( &flshInfo, &g_lights.flashlight_handle ) == REMIXAPI_ERROR_CODE_SUCCESS )
-				{
-					g_remix.DrawLightInstance( g_lights.flashlight_handle );
-				}
-				continue;
-			}
-
-			// Explosion / projectile dynamic light
-			remixapi_LightInfoSphereEXT dlightExt;
-			memset( &dlightExt, 0, sizeof( dlightExt ) );
-			dlightExt.sType                   = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
-			dlightExt.pNext                   = NULL;
-			dlightExt.position.x             = l->origin[0];
-			dlightExt.position.y             = l->origin[1];
-			dlightExt.position.z             = l->origin[2];
-			dlightExt.radius                  = 6.0f;
-			dlightExt.volumetricRadianceScale = 1.0f;
-
-			float falloff = ( l->radius / 64.0f );
-			if( falloff > 4.0f ) falloff = 4.0f;
-
-			remixapi_LightInfo dlightInfo;
-			memset( &dlightInfo, 0, sizeof( dlightInfo ) );
-			dlightInfo.sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
-			dlightInfo.pNext      = &dlightExt;
-			dlightInfo.hash       = 0xD116870000ULL + (uint64_t)i;
-			dlightInfo.radiance.x = ( l->color.r / 255.0f ) * d_scale * falloff;
-			dlightInfo.radiance.y = ( l->color.g / 255.0f ) * d_scale * falloff;
-			dlightInfo.radiance.z = ( l->color.b / 255.0f ) * d_scale * falloff;
-			dlightInfo.isDynamic  = 1;
-
-			if( g_remix.CreateLight && g_remix.CreateLight( &dlightInfo, &g_lights.dlight_handles[i] ) == REMIXAPI_ERROR_CODE_SUCCESS )
-			{
-				g_remix.DrawLightInstance( g_lights.dlight_handles[i] );
-			}
+			R_Lights_SubmitPointDlight( l, R_OPENREMIX_MAX_DLIGHTS + i, d_scale );
 		}
 	}
 }
+

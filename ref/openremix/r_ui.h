@@ -66,12 +66,13 @@ qboolean R_UI_GetTextureDimensions( int texnum, int *width, int *height );
 // Engine Callback Implementations
 void     R_UI_Set2DMode( qboolean enable );
 void     R_UI_Set2DOffset( float x, float y );
+void     R_UI_SetRenderMode( int mode );
 void     R_UI_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, int texnum );
 void     R_UI_FillRGBA( int rendermode, float x, float y, float w, float h, byte r, byte g, byte b, byte a );
 void     R_UI_DrawPoly( const float *verts, int numverts, int texnum );
 void     R_UI_DrawCharacter( int x, int y, int number, int r, int g, int b, int texnum, int charW, int charH );
 
-// 2D TriAPI Emulation Hooks
+// TriAPI Hooks (2D UI and 3D World Geometry)
 void     R_UI_TriRenderMode( int mode );
 void     R_UI_TriBegin( int primitiveCode );
 void     R_UI_TriEnd( void );
@@ -80,6 +81,12 @@ void     R_UI_TriColor4f( float r, float g, float b, float a );
 void     R_UI_TriTexCoord2f( float u, float v );
 void     R_UI_TriVertex3f( float x, float y, float z );
 void     R_UI_TriVertex3fv( const float *worldPnt );
+void     R_UI_TriBrightness( float brightness );
+void     R_UI_TriCullFace( TRICULLSTYLE style );
+int      R_UI_TriSpriteTexture( struct model_s *pSpriteModel, int frame );
+int      R_UI_TriWorldToScreen( const float *world, float *screen );
+void     R_UI_FillTriAPI( triangleapi_t *api );
+void     R_UI_TriFlush( void );
 
 #ifdef __cplusplus
 }

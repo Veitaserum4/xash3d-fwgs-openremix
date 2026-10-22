@@ -100,6 +100,7 @@ typedef struct ref_state_s
 	int                      framenum;
 	cl_entity_t             *entities;
 	uint32_t                 max_entities;
+	int                      particleTexture;
 } ref_state_t;
 
 extern ref_state_t tr;
@@ -135,6 +136,14 @@ static inline cl_entity_t *CL_GetEntityByIndex( int index )
 		return NULL;
 
 	return &tr.entities[index];
+}
+
+static inline model_t *CL_ModelHandle( int index )
+{
+	if( !gp_cl || index < 0 || index >= gp_cl->nummodels )
+		return NULL;
+
+	return gp_cl->models[index];
 }
 
 // Subsystem Headers

@@ -62,10 +62,6 @@ static void R_AllowFog_Stub( qboolean allow )
 	(void)allow;
 }
 
-static void GL_SetRenderMode_Stub( int mode )
-{
-	(void)mode;
-}
 
 static void R_ProcessEntData_Stub( qboolean allocate, cl_entity_t *entities, unsigned int max_entities )
 {
@@ -256,6 +252,9 @@ static void GL_Bind_Hook( int tmu, unsigned int texnum )
 		g_ui.currentTextureId = (remixapi_UITextureHandle)texnum;
 	else
 		g_ui.currentTextureId = 0;
+
+	extern unsigned int g_currentBoundTexture;
+	g_currentBoundTexture = texnum;
 }
 
 static void GL_OrthoBounds_Stub( const float *mins, const float *maxs )
@@ -296,14 +295,6 @@ static void R_FillRenderAPI_Stub( struct render_api_s *api )
 	(void)api;
 }
 
-static void R_UI_FillTriAPI_Hook( struct triangleapi_s *api )
-{
-	if( !api )
-		return;
-
-	api->TexCoord2f = R_UI_TriTexCoord2f;
-}
-
 static void VGUI_SetupDrawing_Stub( qboolean rect )
 {
 	(void)rect;
@@ -334,7 +325,7 @@ const ref_interface_t gReffuncs =
 
 	.R_ClearScreen         = R_ClearScreen,
 	.R_AllowFog            = R_AllowFog_Stub,
-	.GL_SetRenderMode      = GL_SetRenderMode_Stub,
+	.GL_SetRenderMode      = R_UI_SetRenderMode,
 
 	.R_AddEntity           = R_BSP_AddEntity,
 	.R_ProcessEntData      = R_ProcessEntData_Stub,
@@ -349,7 +340,7 @@ const ref_interface_t gReffuncs =
 	.R_Set2DOffset         = R_UI_Set2DOffset,
 	.R_DrawStretchPic      = R_UI_DrawStretchPic,
 	.FillRGBA              = R_UI_FillRGBA,
-	.WorldToScreen         = WorldToScreen_Stub,
+	.WorldToScreen         = R_UI_TriWorldToScreen,
 
 	.VID_ScreenShot        = VID_ScreenShot_Stub,
 	.VID_CubemapShot       = VID_CubemapShot_Stub,
@@ -406,10 +397,10 @@ const ref_interface_t gReffuncs =
 	.Color4ub              = R_UI_TriColor4ub,
 	.Vertex3fv             = R_UI_TriVertex3fv,
 	.Vertex3f              = R_UI_TriVertex3f,
-	.CullFace              = TriCullFace_Stub,
+	.CullFace              = R_UI_TriCullFace,
 
 	.R_FillRenderAPI       = R_FillRenderAPI_Stub,
-	.R_FillTriAPI          = R_UI_FillTriAPI_Hook,
+	.R_FillTriAPI          = R_UI_FillTriAPI,
 	.VGUI_SetupDrawing     = VGUI_SetupDrawing_Stub,
 };
 

@@ -6,6 +6,9 @@
 #include "r_local.h"
 #include "r_remix.h"
 #include "r_bsp.h"
+#include "entity_types.h"
+#include "r_sprite.h"
+#include "r_textures.h"
 
 bsp_state_t g_bspState;
 
@@ -156,14 +159,103 @@ static void R_BSP_AppendIndex( bsp_bucket_t *bucket, uint32_t idx )
 }
 
 //
+// Glass / Translucent Submodel Detection
+//
+static qboolean R_BSP_IsSubmodelGlass( const model_t *submod, const char *subName )
+{
+	if( !submod )
+		return false;
+
+	// 1. Check if any texture assigned to this submodel is recognized as glass
+	if( submod->surfaces && submod->nummodelsurfaces > 0 )
+	{
+		for( int s = 0; s < submod->nummodelsurfaces; s++ )
+		{
+			const msurface_t *surf = &submod->surfaces[submod->firstmodelsurface + s];
+			if( surf->texinfo && surf->texinfo->texture && surf->texinfo->texture->name )
+			{
+				if( R_Textures_IsGlass( surf->texinfo->texture->name ) )
+					return true;
+			}
+		}
+	}
+
+	// 2. Parse map entities string for this submodel's entity definition
+	if( tr.worldmodel && tr.worldmodel->entities && subName && subName[0] )
+	{
+		const char *pos = tr.worldmodel->entities;
+		char targetModel[32];
+		Q_snprintf( targetModel, sizeof( targetModel ), "\"model\" \"%s\"", subName );
+
+		while( ( pos = strstr( pos, "{" ) ) != NULL )
+		{
+			const char *end = strstr( pos, "}" );
+			if( !end ) break;
+
+			const char *foundModel = strstr( pos, targetModel );
+			if( foundModel && foundModel < end )
+			{
+				// Check rendermode: 2 = kRenderTransTexture, 1 = kRenderTransColor
+				const char *rm = strstr( pos, "\"rendermode\"" );
+				if( rm && rm < end )
+				{
+					const char *val = rm + 12;
+					while( *val == ' ' || *val == '\"' || *val == '\t' ) val++;
+					int mode = atoi( val );
+					if( mode == kRenderTransTexture || mode == kRenderTransColor )
+						return true;
+					// Additive/glow brushes are light effects, never glass (their renderamt is brightness)
+					if( mode == kRenderTransAdd || mode == kRenderGlow )
+						return false;
+				}
+
+				// Check material: 0 = matGlass in SDK, 7 = matGlass in Hammer / GoldSrc func_breakable
+				const char *mat = strstr( pos, "\"material\"" );
+				if( mat && mat < end )
+				{
+					const char *val = mat + 10;
+					while( *val == ' ' || *val == '\"' || *val == '\t' ) val++;
+					int matType = atoi( val );
+					if( matType == 0 || matType == 7 )
+						return true;
+				}
+
+				// Check renderamt
+				const char *ra = strstr( pos, "\"renderamt\"" );
+				if( ra && ra < end )
+				{
+					const char *val = ra + 11;
+					while( *val == ' ' || *val == '\"' || *val == '\t' ) val++;
+					int amt = atoi( val );
+					if( amt > 0 && amt < 255 )
+						return true;
+				}
+			}
+
+			pos = end + 1;
+		}
+	}
+
+	return false;
+}
+
+//
 // Extract Surfaces and Build a Batched Mesh
 //
-static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int firstSurf, int numSurfs, uint64_t meshHash )
+static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int firstSurf, int numSurfs, uint64_t meshHash, qboolean isGlass )
 {
 	if( !mod || numSurfs <= 0 )
 		return NULL;
 
 	int numTextures = mod->numtextures;
+	texture_t **textures = mod->textures;
+
+	if( ( numTextures <= 0 || !textures ) && tr.worldmodel )
+	{
+		numTextures = tr.worldmodel->numtextures;
+		textures = tr.worldmodel->textures;
+	}
+
 	if( numTextures <= 0 )
 		numTextures = 1;
 
@@ -198,17 +290,21 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 
 		// Find bucket index
 		int bucketIdx = 0;
-		if( mod->textures && surf->texinfo && surf->texinfo->texture )
+		if( textures && surf->texinfo && surf->texinfo->texture )
 		{
-			for( int t = 0; t < mod->numtextures; t++ )
+			for( int t = 0; t < numTextures; t++ )
 			{
-				if( mod->textures[t] == surf->texinfo->texture )
+				if( textures[t] == surf->texinfo->texture )
 				{
 					bucketIdx = t;
 					break;
 				}
 			}
 			buckets[bucketIdx].texture = surf->texinfo->texture;
+		}
+		else if( surf->texinfo && surf->texinfo->texture )
+		{
+			buckets[0].texture = surf->texinfo->texture;
 		}
 
 		bsp_bucket_t *b = &buckets[bucketIdx];
@@ -320,7 +416,14 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 		st->indices_values    = buckets[t].indices;
 		st->indices_count     = buckets[t].numIndices;
 		st->skinning_hasvalue = 0;
-		st->material          = R_Textures_GetOrCreateForBSP( buckets[t].texture, mod );
+		if( isGlass && !R_Textures_GlassTextured() )
+		{
+			st->material = R_Textures_GetGlassMaterial();
+		}
+		else
+		{
+			st->material = R_Textures_GetOrCreateForBSP( buckets[t].texture, mod );
+		}
 	}
 
 	// Build master MeshInfo
@@ -412,7 +515,7 @@ void R_BSP_NewMap( model_t *worldmodel )
 	// 1. Build Static World Mesh
 	uint64_t worldHash = R_HashString64( worldmodel->name );
 	g_bspState.worldMeshHash = worldHash;
-	g_bspState.worldMesh = R_BSP_BuildMeshFromSurfaces( worldmodel, 0, worldmodel->nummodelsurfaces, worldHash );
+	g_bspState.worldMesh = R_BSP_BuildMeshFromSurfaces( worldmodel, 0, worldmodel->nummodelsurfaces, worldHash, false );
 
 	gEngfuncs.Con_Reportf( "^2ref_openremix: Built static world BLAS for %s (handle %p, hash 0x%llx)^7\n",
 	                       worldmodel->name, (void *)g_bspState.worldMesh, (unsigned long long)worldHash );
@@ -449,14 +552,16 @@ void R_BSP_NewMap( model_t *worldmodel )
 			Q_snprintf( hashStr, sizeof( hashStr ), "%s_%s", worldmodel->name, subName );
 			uint64_t subHash = R_HashString64( hashStr );
 
+			qboolean isGlass = R_BSP_IsSubmodelGlass( submod, subName );
 			remixapi_MeshHandle subMesh = R_BSP_BuildMeshFromSurfaces( submod, submod->firstmodelsurface,
-			                                                          submod->nummodelsurfaces, subHash );
+			                                                          submod->nummodelsurfaces, subHash, isGlass );
 			if( subMesh )
 			{
 				bsp_submodel_mesh_t *entry = &g_bspState.submodels[g_bspState.numSubmodels++];
 				entry->model      = submod;
 				entry->meshHandle = subMesh;
 				entry->hash       = subHash;
+				entry->isGlass    = isGlass;
 				Q_strncpy( entry->name, subName, sizeof( entry->name ) );
 			}
 		}
@@ -487,17 +592,19 @@ remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod )
 		Q_snprintf( hashStr, sizeof( hashStr ), "%s_%s", wname, mod->name );
 		uint64_t subHash = R_HashString64( hashStr );
 
+		qboolean isGlass = R_BSP_IsSubmodelGlass( mod, mod->name );
 		remixapi_MeshHandle subMesh = R_BSP_BuildMeshFromSurfaces( mod, mod->firstmodelsurface,
-		                                                          mod->nummodelsurfaces, subHash );
+		                                                          mod->nummodelsurfaces, subHash, isGlass );
 		if( subMesh )
 		{
 			bsp_submodel_mesh_t *entry = &g_bspState.submodels[g_bspState.numSubmodels++];
 			entry->model      = mod;
 			entry->meshHandle = subMesh;
 			entry->hash       = subHash;
+			entry->isGlass    = isGlass;
 			Q_strncpy( entry->name, mod->name, sizeof( entry->name ) );
-			gEngfuncs.Con_Reportf( "^2ref_openremix: Built brush submodel BLAS on-demand for %s (handle %p)^7\n",
-			                       mod->name, (void *)subMesh );
+			gEngfuncs.Con_Reportf( "^2ref_openremix: Built brush submodel BLAS on-demand for %s (handle %p, glass=%d)^7\n",
+			                       mod->name, (void *)subMesh, (int)isGlass );
 			return subMesh;
 		}
 	}
@@ -514,12 +621,12 @@ void R_BSP_ClearEntities( void )
 {
 	g_bspState.num_solid_entities = 0;
 	g_bspState.num_trans_entities = 0;
+	g_bspState.num_beam_entities = 0;
 	g_bspSceneCount++;
 }
 
 qboolean R_BSP_AddEntity( cl_entity_t *clent, int type )
 {
-	(void)type;
 	if( !clent || !clent->model )
 		return false;
 
@@ -531,10 +638,25 @@ qboolean R_BSP_AddEntity( cl_entity_t *clent, int type )
 		return true;
 	clent->visframe = g_bspSceneCount;
 
-	// Do not cull brush models based on CL_FxBlend; in Half-Life, translucent/cutout
-	// brushes (such as floor grates and glass) often have renderamt set to 0.
-	if( clent->model->type != mod_brush && clent->curstate.rendermode != kRenderNormal && CL_FxBlend( clent ) <= 0 )
-		return true; // invisible studio/sprite entity, consumed
+	// Server beams keep beam type/flags in rendermode and the sprite in modelindex: they are
+	// not sprites to billboard, CL_DrawBeams rebuilds them as beams (see R_BeamDrawCustomEntity)
+	if( type == ET_BEAM )
+	{
+		if( CL_FxBlend( clent ) <= 0 )
+			return true;
+		if( g_bspState.num_beam_entities < MAX_VISIBLE_PACKET )
+		{
+			g_bspState.beam_entities[g_bspState.num_beam_entities++] = clent;
+			return true;
+		}
+		return false;
+	}
+
+	// Same rule as the GL renderer: Normal and TransAlpha (cutout grates) ignore renderamt,
+	// every other mode at zero blend is invisible. Maps hide brushes this way (e.g. the
+	// intact/broken states of a panel), so drawing them showed stray "glass" boxes.
+	if( clent->curstate.rendermode != kRenderNormal && clent->curstate.rendermode != kRenderTransAlpha && CL_FxBlend( clent ) <= 0 )
+		return true; // invisible, consumed
 
 	if( clent->curstate.rendermode == kRenderNormal )
 	{
@@ -611,6 +733,34 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	if( !subMesh || !g_remix.DrawInstance )
 		return;
 
+	// Check if this entity should be rendered with ray-traced translucent glass
+	qboolean isGlass = false;
+	qboolean isAdditive = ( ent->curstate.rendermode == kRenderTransAdd || ent->curstate.rendermode == kRenderGlow );
+	if( isAdditive )
+	{
+		// Light effects (e.g. the resonance cascade column), never glass
+	}
+	else if( ent->curstate.rendermode == kRenderTransTexture || ent->curstate.rendermode == kRenderTransColor )
+	{
+		isGlass = true;
+	}
+	else
+	{
+		for( uint32_t i = 0; i < g_bspState.numSubmodels; i++ )
+		{
+			if( g_bspState.submodels[i].model == ent->model || !strcmp( g_bspState.submodels[i].name, ent->model->name ) )
+			{
+				if( g_bspState.submodels[i].isGlass )
+					isGlass = true;
+				break;
+			}
+		}
+		if( !isGlass && R_BSP_IsSubmodelGlass( ent->model, ent->model->name ) )
+		{
+			isGlass = true;
+		}
+	}
+
 	// Build 4x4 transform from entity orientation
 	vec3_t angles;
 	if( VectorIsNull( ent->angles ) )
@@ -637,13 +787,17 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	if( !entityInstanceId )
 		entityInstanceId = 0x8000000000000000ULL | (uint64_t)(uintptr_t)ent;
 
-	if( s_brushLogCount < 25 )
+	static qboolean s_loggedBrushes[MAX_BSP_SUBMODELS] = { 0 };
+	int subIdx = 0;
+	if( ent->model->name[0] == '*' )
+		subIdx = atoi( ent->model->name + 1 );
+	if( subIdx >= 0 && subIdx < MAX_BSP_SUBMODELS && !s_loggedBrushes[subIdx] )
 	{
-		s_brushLogCount++;
-		gEngfuncs.Con_Reportf( "^2ref_openremix: Drawing brush %s (ent=%p, idx=%d, org=[%.1f, %.1f, %.1f], rendermode=%d)^7\n",
-		                       ent->model->name, (void *)ent, ent->index,
-		                       ent->origin[0], ent->origin[1], ent->origin[2],
-		                       ent->curstate.rendermode );
+		s_loggedBrushes[subIdx] = true;
+		gEngfuncs.Con_Printf( "^2ref_openremix: Drawing brush %s (ent=%p, idx=%d, org=[%.1f, %.1f, %.1f], rendermode=%d, isGlass=%d)^7\n",
+		                      ent->model->name, (void *)ent, ent->index,
+		                      ent->origin[0], ent->origin[1], ent->origin[2],
+		                      ent->curstate.rendermode, (int)isGlass );
 	}
 
 	remixapi_InstanceIdentityEXT identityExt;
@@ -654,10 +808,105 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	identityExt.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT;
 	identityExt.rasterVisible  = 1;
 
+	remixapi_InstanceInfoMaterialEXT matExt;
+	memset( &matExt, 0, sizeof( matExt ) );
+	matExt.sType    = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_MATERIAL_EXT;
+	matExt.pNext    = &identityExt;
+	matExt.material = R_Textures_GetGlassMaterial();
+
+	remixapi_InstanceInfoBlendEXT blendExt;
+	memset( &blendExt, 0, sizeof( blendExt ) );
+	blendExt.sType                = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BLEND_EXT;
+	blendExt.pNext                = &identityExt;
+	blendExt.alphaBlendEnabled    = 1;
+	blendExt.srcColorBlendFactor  = 6; // D3DBLEND_SRCALPHA
+	blendExt.dstColorBlendFactor  = 7; // D3DBLEND_INVSRCALPHA
+	blendExt.colorBlendOp         = 0; // D3DBLENDOP_ADD
+	blendExt.srcAlphaBlendFactor  = 1; // D3DBLEND_ONE
+	blendExt.dstAlphaBlendFactor  = 7; // D3DBLEND_INVSRCALPHA
+	blendExt.alphaBlendOp         = 0; // D3DBLENDOP_ADD
+	blendExt.writeMask            = 15; // RGBA write enabled
+
+	// Additive brushes (beams, glows, energy columns): the path tracer only knows coverage
+	// blending, so draw them as self-illuminated surfaces with renderamt as coverage.
+	// They glow and light the scene; without a usable texture fall back to a raster overlay.
+	remixapi_InstanceRasterStateEXT addRaster;
+	remixapi_InstanceInfoBlendEXT addBlend;
+	remixapi_InstanceIdentityEXT addIdent;
+	remixapi_InstanceInfoMaterialEXT addMat;
+	if( isAdditive )
+	{
+		int amt = CL_FxBlend( ent );
+		if( amt <= 0 )
+			return;
+
+		remixapi_MaterialHandle emisMat = NULL;
+		const model_t *mod = ent->model;
+		if( mod->surfaces && mod->nummodelsurfaces > 0 )
+		{
+			const msurface_t *surf = &mod->surfaces[mod->firstmodelsurface];
+			if( surf->texinfo && surf->texinfo->texture )
+				emisMat = R_Textures_GetEmissiveMaterial( (unsigned int)surf->texinfo->texture->gl_texturenum );
+		}
+
+		if( emisMat )
+		{
+			R_SetupSpriteBlendState( &addBlend, &addIdent, &addRaster, entityInstanceId, kRenderTransAlpha );
+			addIdent.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT;
+
+			memset( &addMat, 0, sizeof( addMat ) );
+			addMat.sType    = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_MATERIAL_EXT;
+			addMat.pNext    = &addIdent;
+			addMat.material = emisMat;
+		}
+		else
+		{
+			R_SetupSpriteBlendState( &addBlend, &addIdent, &addRaster, entityInstanceId, kRenderTransAdd );
+			memset( &addMat, 0, sizeof( addMat ) );
+		}
+
+		addBlend.tFactor                = ( (uint32_t)bound( 0, amt, 255 ) << 24 ) | 0x00FFFFFFu;
+		addBlend.textureColorArg2Source = 3; // Factor
+		addBlend.textureAlphaArg2Source = 3; // Factor
+	}
+
 	remixapi_InstanceInfo instance;
 	memset( &instance, 0, sizeof( instance ) );
 	instance.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
-	instance.pNext         = &identityExt;
+	if( isAdditive )
+	{
+		instance.pNext = addMat.sType ? (void *)&addMat : (void *)&addIdent;
+	}
+	else if( isGlass && R_Textures_GlassTextured() )
+	{
+		// Textured glass: the brush's own textures, coverage from renderamt as in GoldSrc
+		int amt = ( ent->curstate.rendermode == kRenderTransTexture || ent->curstate.rendermode == kRenderTransColor ) ? CL_FxBlend( ent ) : 255;
+		R_SetupSpriteBlendState( &addBlend, &addIdent, &addRaster, entityInstanceId, kRenderTransAlpha );
+		addIdent.classification         = REMIXAPI_INSTANCE_DYNAMIC_EXT;
+		// Glass-named textures already carry rt_glass_texture opacity in their material:
+		// divide it out so renderamt alone decides how opaque the entity is
+		amt = (int)( amt / R_Textures_GlassOpacity() );
+		addBlend.tFactor                = ( (uint32_t)bound( 1, amt, 255 ) << 24 ) | 0x00FFFFFFu;
+		addBlend.textureAlphaArg1Source = 3; // Factor (texture alpha is opaque for glass)
+		addBlend.textureAlphaOperation  = 1; // Select arg 1
+		instance.pNext = &addIdent;
+	}
+	else if( isGlass )
+	{
+		// Ray-traced translucent glass: use material override without blendExt
+		// so OpenRemix path tracer treats it as P::Transmission (refraction, reflection, transmission tint)
+		instance.pNext = &matExt;
+	}
+	else if( ent->curstate.rendermode != kRenderNormal && ent->curstate.rendermode != kRenderTransAlpha )
+	{
+		// Non-glass blending (e.g. additive glows)
+		instance.pNext = &blendExt;
+	}
+	else
+	{
+		// Solid or alpha-tested cutout (e.g. grates)
+		instance.pNext = &identityExt;
+	}
 	instance.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING;
 	instance.mesh          = subMesh;
 	instance.transform     = transform;

@@ -35,6 +35,23 @@ void     CL_DrawTracers( double frametime, particle_t *tracers );
 // Occlusion and glare blend calculation
 qboolean R_SpriteOccluded( cl_entity_t *e, vec3_t origin, float *pscale );
 
+// Dynamic Mesh Buffer Slot
+typedef struct dynamic_mesh_slot_s
+{
+	remixapi_MeshHandle   handle;
+	uint64_t              hash;
+} dynamic_mesh_slot_t;
+
+dynamic_mesh_slot_t    *R_AllocDynamicMeshSlot( void );
+remixapi_MaterialHandle R_GetSpriteMaterial( int texnum );
+void                    R_SetupSpriteBlendState( remixapi_InstanceInfoBlendEXT *pBlend,
+                                                 remixapi_InstanceIdentityEXT *pIdent,
+                                                 remixapi_InstanceRasterStateEXT *pRaster,
+                                                 uint64_t instanceId,
+                                                 int rendermode );
+
+extern unsigned int g_currentBoundTexture;
+
 #ifdef __cplusplus
 }
 #endif

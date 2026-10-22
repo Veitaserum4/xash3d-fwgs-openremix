@@ -6,8 +6,14 @@
 #include "r_local.h"
 #include "r_remix.h"
 #include "r_ui.h"
+#include "r_sprite.h"
+#include "r_textures.h"
+#include "sprite.h"
 
 ui_state_t g_ui;
+
+// Render mode set by the engine via GL_SetRenderMode before 2D sprite draws (SPR_DrawAdditive etc.)
+static int s_ui2DRenderMode = kRenderNormal;
 
 // Internal 2D TriAPI accumulator
 static struct
@@ -20,6 +26,36 @@ static struct
 	float    tempUVs[64][2];
 	uint32_t tempColors[64];
 } s_tri2D;
+
+#define MAX_TRI3D_BATCH_VERTS   4096
+#define MAX_TRI3D_BATCH_INDICES 12288
+#define MAX_TRI3D_TEMP_VERTS    512
+#define MAX_TRI3D_TEMP_INDICES  1536
+
+typedef struct tri3d_state_s
+{
+	int                      primitive;
+	int                      renderMode;
+	int                      activeBatchMode;
+	unsigned int             activeBatchTexture;
+
+	// Temporary per-primitive accumulator (for single Begin/End)
+	uint32_t                 tempVertexCount;
+	remixapi_HardcodedVertex tempVertices[MAX_TRI3D_TEMP_VERTS];
+
+	// Batched vertices and indices waiting to be flushed
+	uint32_t                 batchVertexCount;
+	uint32_t                 batchIndexCount;
+	remixapi_HardcodedVertex batchVertices[MAX_TRI3D_BATCH_VERTS];
+	uint32_t                 batchIndices[MAX_TRI3D_BATCH_INDICES];
+
+	float                    currentUV[2];
+	uint32_t                 baseColor;    // ARGB unmodulated: ((a<<24)|(r<<16)|(g<<8)|b)
+	uint32_t                 currentColor; // ARGB active (modulated by Brightness)
+} tri3d_state_t;
+
+static tri3d_state_t s_tri3D;
+unsigned int g_currentBoundTexture = 0;
 
 /*
  * R_UI_Init - Initialize UI quad buffers and clear texture registry
@@ -312,6 +348,14 @@ static void R_UI_EmitQuad( float x0, float y0, float s0, float t0,
 }
 
 /*
+ * R_UI_SetRenderMode - GL_SetRenderMode callback, affects subsequent 2D draws
+ */
+void R_UI_SetRenderMode( int mode )
+{
+	s_ui2DRenderMode = mode;
+}
+
+/*
  * R_UI_DrawStretchPic - Primary engine callback for 2D textured sprites and font glyphs
  */
 void R_UI_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, int texnum )
@@ -325,6 +369,12 @@ void R_UI_DrawStretchPic( float x, float y, float w, float h, float s1, float t1
 		textureId = (remixapi_UITextureHandle)texnum;
 
 	uint32_t flags = REMIXAPI_UI_NATIVE_LINEAR;
+
+	if( s_ui2DRenderMode == kRenderTransAdd || s_ui2DRenderMode == kRenderGlow )
+	{
+		// Custom blend: Src = SRC_ALPHA (6), Dst = ONE (1)
+		flags |= REMIXAPI_UI_NATIVE_CUSTOM_BLEND | ( 6 << 8 ) | ( 1 << 12 );
+	}
 
 	R_UI_EmitQuad(
 		x,         y,         s1, t1,  // Top-left
@@ -416,23 +466,45 @@ void R_UI_DrawCharacter( int x, int y, int number, int r, int g, int b, int texn
 }
 
 /*
- * 2D TriAPI Implementation: Accumulate TriAPI calls in 2D mode into UI draw lists
+ * TriAPI Implementation: 2D HUD or 3D World Geometry
  */
+void R_UI_TriFlush( void );
+
 void R_UI_TriRenderMode( int mode )
 {
-	(void)mode;
+	if( !tr.is2DMode && mode != s_tri3D.activeBatchMode && s_tri3D.batchIndexCount > 0 )
+	{
+		R_UI_TriFlush();
+	}
+	s_tri3D.renderMode      = mode;
+	s_tri3D.activeBatchMode = mode;
 }
 
 void R_UI_TriBegin( int primitiveCode )
 {
-	s_tri2D.primitive   = primitiveCode;
-	s_tri2D.vertexCount = 0;
+	if( tr.is2DMode )
+	{
+		s_tri2D.primitive   = primitiveCode;
+		s_tri2D.vertexCount = 0;
+	}
+	else
+	{
+		s_tri3D.primitive       = primitiveCode;
+		s_tri3D.tempVertexCount = 0;
+	}
 }
 
 void R_UI_TriColor4ub( byte r, byte g, byte b, byte a )
 {
-	s_tri2D.currentColor = ( (uint32_t)a << 24 ) | ( (uint32_t)b << 16 ) | ( (uint32_t)g << 8 ) | (uint32_t)r;
-	g_ui.currentColor    = s_tri2D.currentColor;
+	// 3D meshes in OpenRemix expect ARGB: ((a<<24)|(r<<16)|(g<<8)|b)
+	uint32_t col3D = ( (uint32_t)a << 24 ) | ( (uint32_t)r << 16 ) | ( (uint32_t)g << 8 ) | (uint32_t)b;
+	s_tri3D.baseColor    = col3D;
+	s_tri3D.currentColor = col3D;
+
+	// 2D UI compositor in OpenRemix expects ABGR: ((a<<24)|(b<<16)|(g<<8)|r)
+	uint32_t col2D = ( (uint32_t)a << 24 ) | ( (uint32_t)b << 16 ) | ( (uint32_t)g << 8 ) | (uint32_t)r;
+	s_tri2D.currentColor = col2D;
+	g_ui.currentColor    = col2D;
 }
 
 void R_UI_TriColor4f( float r, float g, float b, float a )
@@ -448,19 +520,39 @@ void R_UI_TriTexCoord2f( float u, float v )
 {
 	s_tri2D.currentUV[0] = u;
 	s_tri2D.currentUV[1] = v;
+	s_tri3D.currentUV[0] = u;
+	s_tri3D.currentUV[1] = v;
 }
 
 void R_UI_TriVertex3f( float x, float y, float z )
 {
-	(void)z;
-	if( s_tri2D.vertexCount < 64 )
+	if( tr.is2DMode )
 	{
-		int idx = s_tri2D.vertexCount++;
-		s_tri2D.tempVerts[idx][0]  = x;
-		s_tri2D.tempVerts[idx][1]  = y;
-		s_tri2D.tempUVs[idx][0]    = s_tri2D.currentUV[0];
-		s_tri2D.tempUVs[idx][1]    = s_tri2D.currentUV[1];
-		s_tri2D.tempColors[idx]    = s_tri2D.currentColor;
+		if( s_tri2D.vertexCount < 64 )
+		{
+			int idx = s_tri2D.vertexCount++;
+			s_tri2D.tempVerts[idx][0]  = x;
+			s_tri2D.tempVerts[idx][1]  = y;
+			s_tri2D.tempUVs[idx][0]    = s_tri2D.currentUV[0];
+			s_tri2D.tempUVs[idx][1]    = s_tri2D.currentUV[1];
+			s_tri2D.tempColors[idx]    = s_tri2D.currentColor;
+		}
+	}
+	else
+	{
+		if( s_tri3D.tempVertexCount < MAX_TRI3D_TEMP_VERTS )
+		{
+			uint32_t idx = s_tri3D.tempVertexCount++;
+			s_tri3D.tempVertices[idx].position[0] = x;
+			s_tri3D.tempVertices[idx].position[1] = y;
+			s_tri3D.tempVertices[idx].position[2] = z;
+			s_tri3D.tempVertices[idx].normal[0]   = 0.0f;
+			s_tri3D.tempVertices[idx].normal[1]   = 0.0f;
+			s_tri3D.tempVertices[idx].normal[2]   = 1.0f;
+			s_tri3D.tempVertices[idx].texcoord[0] = s_tri3D.currentUV[0];
+			s_tri3D.tempVertices[idx].texcoord[1] = s_tri3D.currentUV[1];
+			s_tri3D.tempVertices[idx].color       = s_tri3D.currentColor;
+		}
 	}
 }
 
@@ -470,62 +562,418 @@ void R_UI_TriVertex3fv( const float *worldPnt )
 		R_UI_TriVertex3f( worldPnt[0], worldPnt[1], worldPnt[2] );
 }
 
+void R_UI_TriBrightness( float brightness )
+{
+	uint32_t c = s_tri3D.baseColor;
+	uint8_t a = ( c >> 24 ) & 0xFF;
+	if( s_tri3D.renderMode == kRenderTransAlpha )
+		a = bound( 0, (int)( (float)a * brightness ), 255 );
+	uint8_t r = bound( 0, (int)( ( ( c >> 16 ) & 0xFF ) * brightness ), 255 );
+	uint8_t g = bound( 0, (int)( ( ( c >> 8 ) & 0xFF ) * brightness ), 255 );
+	uint8_t b = bound( 0, (int)( ( c & 0xFF ) * brightness ), 255 );
+	s_tri3D.currentColor = ( (uint32_t)a << 24 ) | ( (uint32_t)r << 16 ) | ( (uint32_t)g << 8 ) | (uint32_t)b;
+}
+
+void R_UI_TriCullFace( TRICULLSTYLE style )
+{
+	(void)style;
+}
+
+int R_UI_TriSpriteTexture( struct model_s *pSpriteModel, int frame )
+{
+	if( !pSpriteModel || pSpriteModel->type != mod_sprite || !pSpriteModel->cache.data )
+		return 0;
+
+	mspriteframe_t *sframe = gEngfuncs.R_GetSpriteFrame ? gEngfuncs.R_GetSpriteFrame( pSpriteModel, frame, 0.0f ) : NULL;
+	if( !sframe || sframe->gl_texturenum == 0 )
+		return 0;
+
+	unsigned int newTex = (unsigned int)sframe->gl_texturenum;
+	if( !tr.is2DMode && newTex != s_tri3D.activeBatchTexture && s_tri3D.batchIndexCount > 0 )
+	{
+		R_UI_TriFlush();
+	}
+
+	g_currentBoundTexture      = newTex;
+	s_tri3D.activeBatchTexture = newTex;
+
+	if( sframe->gl_texturenum < MAX_UI_TEXTURES && g_ui.textures[sframe->gl_texturenum].registered )
+		g_ui.currentTextureId = (remixapi_UITextureHandle)sframe->gl_texturenum;
+	else
+		g_ui.currentTextureId = 0;
+	return 1;
+}
+
+int R_UI_TriWorldToScreen( const float *world, float *screen )
+{
+	if( !world || !screen )
+		return 1;
+
+	vec3_t local;
+	VectorSubtract( world, RI.vieworg, local );
+	float z = DotProduct( local, RI.vforward );
+	if( z <= 0.001f )
+	{
+		screen[0] = screen[1] = screen[2] = 0.0f;
+		return 1; // Behind camera
+	}
+
+	float x = DotProduct( local, RI.vright );
+	float y = DotProduct( local, RI.vup );
+
+	float width  = ( gpGlobals && gpGlobals->width > 0 )  ? (float)gpGlobals->width  : 1920.0f;
+	float height = ( gpGlobals && gpGlobals->height > 0 ) ? (float)gpGlobals->height : 1080.0f;
+	float aspect = ( height > 0.0f ) ? ( width / height ) : ( 16.0f / 9.0f );
+
+	float halfFovY = DEG2RAD( RI.fov_y > 0.0f ? RI.fov_y : 75.0f ) * 0.5f;
+	float tanHalfFovY = tanf( halfFovY );
+	float tanHalfFovX = tanHalfFovY * aspect;
+
+	float normX = x / ( z * tanHalfFovX );
+	float normY = y / ( z * tanHalfFovY );
+
+	screen[0] = ( normX * 0.5f + 0.5f ) * width;
+	screen[1] = ( -normY * 0.5f + 0.5f ) * height;
+	screen[2] = z;
+
+	return 0;
+}
+
 void R_UI_TriEnd( void )
 {
-	if( s_tri2D.vertexCount < 3 )
+	if( tr.is2DMode )
+	{
+		if( s_tri2D.vertexCount < 3 )
+			return;
+
+		remixapi_UITextureHandle textureId = 0;
+		if( g_ui.currentTextureId > 0 && (size_t)g_ui.currentTextureId < MAX_UI_TEXTURES && g_ui.textures[(size_t)g_ui.currentTextureId].registered )
+			textureId = g_ui.currentTextureId;
+
+		uint32_t flags = REMIXAPI_UI_NATIVE_LINEAR;
+
+		if( s_tri2D.primitive == TRI_QUADS && s_tri2D.vertexCount >= 4 )
+		{
+			for( int i = 0; i + 3 < s_tri2D.vertexCount; i += 4 )
+			{
+				R_UI_EmitQuad(
+					s_tri2D.tempVerts[i+0][0], s_tri2D.tempVerts[i+0][1], s_tri2D.tempUVs[i+0][0], s_tri2D.tempUVs[i+0][1],
+					s_tri2D.tempVerts[i+1][0], s_tri2D.tempVerts[i+1][1], s_tri2D.tempUVs[i+1][0], s_tri2D.tempUVs[i+1][1],
+					s_tri2D.tempVerts[i+2][0], s_tri2D.tempVerts[i+2][1], s_tri2D.tempUVs[i+2][0], s_tri2D.tempUVs[i+2][1],
+					s_tri2D.tempVerts[i+3][0], s_tri2D.tempVerts[i+3][1], s_tri2D.tempUVs[i+3][0], s_tri2D.tempUVs[i+3][1],
+					textureId,
+					s_tri2D.tempColors[i+0],
+					flags
+				);
+			}
+		}
+		else if( s_tri2D.primitive == TRI_TRIANGLES )
+		{
+			for( int i = 0; i + 2 < s_tri2D.vertexCount; i += 3 )
+			{
+				R_UI_EmitQuad(
+					s_tri2D.tempVerts[i+0][0], s_tri2D.tempVerts[i+0][1], s_tri2D.tempUVs[i+0][0], s_tri2D.tempUVs[i+0][1],
+					s_tri2D.tempVerts[i+1][0], s_tri2D.tempVerts[i+1][1], s_tri2D.tempUVs[i+1][0], s_tri2D.tempUVs[i+1][1],
+					s_tri2D.tempVerts[i+2][0], s_tri2D.tempVerts[i+2][1], s_tri2D.tempUVs[i+2][0], s_tri2D.tempUVs[i+2][1],
+					s_tri2D.tempVerts[i+2][0], s_tri2D.tempVerts[i+2][1], s_tri2D.tempUVs[i+2][0], s_tri2D.tempUVs[i+2][1],
+					textureId,
+					s_tri2D.tempColors[i+0],
+					flags
+				);
+			}
+		}
+		else if( s_tri2D.primitive == TRI_TRIANGLE_FAN || s_tri2D.primitive == TRI_POLYGON )
+		{
+			for( int i = 1; i + 1 < s_tri2D.vertexCount; i++ )
+			{
+				R_UI_EmitQuad(
+					s_tri2D.tempVerts[0][0],   s_tri2D.tempVerts[0][1],   s_tri2D.tempUVs[0][0],   s_tri2D.tempUVs[0][1],
+					s_tri2D.tempVerts[i][0],   s_tri2D.tempVerts[i][1],   s_tri2D.tempUVs[i][0],   s_tri2D.tempUVs[i][1],
+					s_tri2D.tempVerts[i+1][0], s_tri2D.tempVerts[i+1][1], s_tri2D.tempUVs[i+1][0], s_tri2D.tempUVs[i+1][1],
+					s_tri2D.tempVerts[i+1][0], s_tri2D.tempVerts[i+1][1], s_tri2D.tempUVs[i+1][0], s_tri2D.tempUVs[i+1][1],
+					textureId,
+					s_tri2D.tempColors[0],
+					flags
+				);
+			}
+		}
+		return;
+	}
+
+	// 3D TriAPI Path: accumulate into batch buffer
+	if( s_tri3D.tempVertexCount < 2 )
 		return;
 
-	remixapi_UITextureHandle textureId = 0;
-	if( g_ui.currentTextureId > 0 && (size_t)g_ui.currentTextureId < MAX_UI_TEXTURES && g_ui.textures[(size_t)g_ui.currentTextureId].registered )
-		textureId = g_ui.currentTextureId;
+	uint32_t tempIndices[MAX_TRI3D_TEMP_INDICES];
+	uint32_t tempIndexCount = 0;
 
-	uint32_t flags = REMIXAPI_UI_NATIVE_LINEAR;
+	remixapi_HardcodedVertex lineExtraVerts[MAX_TRI3D_TEMP_VERTS * 2];
+	uint32_t lineExtraCount = 0;
 
-	if( s_tri2D.primitive == TRI_QUADS && s_tri2D.vertexCount >= 4 )
+	switch( s_tri3D.primitive )
 	{
-		for( int i = 0; i + 3 < s_tri2D.vertexCount; i += 4 )
+	case TRI_TRIANGLES:
+		for( uint32_t i = 0; i + 2 < s_tri3D.tempVertexCount && tempIndexCount + 3 <= MAX_TRI3D_TEMP_INDICES; i += 3 )
 		{
-			R_UI_EmitQuad(
-				s_tri2D.tempVerts[i+0][0], s_tri2D.tempVerts[i+0][1], s_tri2D.tempUVs[i+0][0], s_tri2D.tempUVs[i+0][1],
-				s_tri2D.tempVerts[i+1][0], s_tri2D.tempVerts[i+1][1], s_tri2D.tempUVs[i+1][0], s_tri2D.tempUVs[i+1][1],
-				s_tri2D.tempVerts[i+2][0], s_tri2D.tempVerts[i+2][1], s_tri2D.tempUVs[i+2][0], s_tri2D.tempUVs[i+2][1],
-				s_tri2D.tempVerts[i+3][0], s_tri2D.tempVerts[i+3][1], s_tri2D.tempUVs[i+3][0], s_tri2D.tempUVs[i+3][1],
-				textureId,
-				s_tri2D.tempColors[i+0],
-				flags
-			);
+			tempIndices[tempIndexCount++] = i + 0;
+			tempIndices[tempIndexCount++] = i + 1;
+			tempIndices[tempIndexCount++] = i + 2;
+		}
+		break;
+
+	case TRI_TRIANGLE_FAN:
+	case TRI_POLYGON:
+		for( uint32_t i = 1; i + 1 < s_tri3D.tempVertexCount && tempIndexCount + 3 <= MAX_TRI3D_TEMP_INDICES; i++ )
+		{
+			tempIndices[tempIndexCount++] = 0;
+			tempIndices[tempIndexCount++] = i;
+			tempIndices[tempIndexCount++] = i + 1;
+		}
+		break;
+
+	case TRI_QUADS:
+		for( uint32_t i = 0; i + 3 < s_tri3D.tempVertexCount && tempIndexCount + 6 <= MAX_TRI3D_TEMP_INDICES; i += 4 )
+		{
+			tempIndices[tempIndexCount++] = i + 0;
+			tempIndices[tempIndexCount++] = i + 1;
+			tempIndices[tempIndexCount++] = i + 2;
+			tempIndices[tempIndexCount++] = i + 0;
+			tempIndices[tempIndexCount++] = i + 2;
+			tempIndices[tempIndexCount++] = i + 3;
+		}
+		break;
+
+	case TRI_TRIANGLE_STRIP:
+		for( uint32_t i = 0; i + 2 < s_tri3D.tempVertexCount && tempIndexCount + 3 <= MAX_TRI3D_TEMP_INDICES; i++ )
+		{
+			if( i & 1 )
+			{
+				tempIndices[tempIndexCount++] = i + 1;
+				tempIndices[tempIndexCount++] = i + 0;
+				tempIndices[tempIndexCount++] = i + 2;
+			}
+			else
+			{
+				tempIndices[tempIndexCount++] = i + 0;
+				tempIndices[tempIndexCount++] = i + 1;
+				tempIndices[tempIndexCount++] = i + 2;
+			}
+		}
+		break;
+
+	case TRI_QUAD_STRIP:
+		for( uint32_t i = 0; i + 3 < s_tri3D.tempVertexCount && tempIndexCount + 6 <= MAX_TRI3D_TEMP_INDICES; i += 2 )
+		{
+			tempIndices[tempIndexCount++] = i + 0;
+			tempIndices[tempIndexCount++] = i + 1;
+			tempIndices[tempIndexCount++] = i + 3;
+			tempIndices[tempIndexCount++] = i + 0;
+			tempIndices[tempIndexCount++] = i + 3;
+			tempIndices[tempIndexCount++] = i + 2;
+		}
+		break;
+
+	case TRI_LINES:
+		for( uint32_t i = 0; i + 1 < s_tri3D.tempVertexCount && tempIndexCount + 6 <= MAX_TRI3D_TEMP_INDICES; i += 2 )
+		{
+			vec3_t p0, p1, dir, normal;
+			VectorCopy( s_tri3D.tempVertices[i + 0].position, p0 );
+			VectorCopy( s_tri3D.tempVertices[i + 1].position, p1 );
+			VectorSubtract( p1, p0, dir );
+			VectorNormalize( dir );
+
+			vec3_t viewDir;
+			VectorSubtract( p0, RI.vieworg, viewDir );
+			CrossProduct( dir, viewDir, normal );
+			VectorNormalize( normal );
+
+			float halfW = 1.0f;
+			uint32_t b = lineExtraCount;
+			if( b + 4 > MAX_TRI3D_TEMP_VERTS * 2 ) break;
+			lineExtraCount += 4;
+
+			VectorMA( p0, halfW, normal, lineExtraVerts[b + 0].position );
+			VectorMA( p0, -halfW, normal, lineExtraVerts[b + 1].position );
+			VectorMA( p1, halfW, normal, lineExtraVerts[b + 2].position );
+			VectorMA( p1, -halfW, normal, lineExtraVerts[b + 3].position );
+
+			for( int k = 0; k < 4; k++ )
+			{
+				lineExtraVerts[b + k].normal[2] = 1.0f;
+				lineExtraVerts[b + k].color     = s_tri3D.tempVertices[i].color;
+			}
+			lineExtraVerts[b + 0].texcoord[0] = 0.0f; lineExtraVerts[b + 0].texcoord[1] = 0.0f;
+			lineExtraVerts[b + 1].texcoord[0] = 1.0f; lineExtraVerts[b + 1].texcoord[1] = 0.0f;
+			lineExtraVerts[b + 2].texcoord[0] = 0.0f; lineExtraVerts[b + 2].texcoord[1] = 1.0f;
+			lineExtraVerts[b + 3].texcoord[0] = 1.0f; lineExtraVerts[b + 3].texcoord[1] = 1.0f;
+
+			tempIndices[tempIndexCount++] = b + 0;
+			tempIndices[tempIndexCount++] = b + 1;
+			tempIndices[tempIndexCount++] = b + 2;
+			tempIndices[tempIndexCount++] = b + 1;
+			tempIndices[tempIndexCount++] = b + 3;
+			tempIndices[tempIndexCount++] = b + 2;
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	if( tempIndexCount == 0 )
+	{
+		s_tri3D.tempVertexCount = 0;
+		return;
+	}
+
+	const remixapi_HardcodedVertex *srcVerts = ( s_tri3D.primitive == TRI_LINES ) ? lineExtraVerts : s_tri3D.tempVertices;
+	uint32_t numNewVerts = ( s_tri3D.primitive == TRI_LINES ) ? lineExtraCount : s_tri3D.tempVertexCount;
+
+	// Flush if buffer would overflow
+	if( s_tri3D.batchVertexCount + numNewVerts > MAX_TRI3D_BATCH_VERTS ||
+	    s_tri3D.batchIndexCount + tempIndexCount > MAX_TRI3D_BATCH_INDICES )
+	{
+		R_UI_TriFlush();
+	}
+
+	uint32_t baseIdx = s_tri3D.batchVertexCount;
+	memcpy( &s_tri3D.batchVertices[baseIdx], srcVerts, numNewVerts * sizeof( remixapi_HardcodedVertex ) );
+	s_tri3D.batchVertexCount += numNewVerts;
+
+	for( uint32_t i = 0; i < tempIndexCount; i++ )
+	{
+		s_tri3D.batchIndices[s_tri3D.batchIndexCount++] = baseIdx + tempIndices[i];
+	}
+
+	s_tri3D.tempVertexCount = 0;
+}
+
+/*
+ * R_UI_TriFlush - Submit accumulated 3D TriAPI geometry to OpenRemix
+ */
+void R_UI_TriFlush( void )
+{
+	if( s_tri3D.batchIndexCount == 0 || s_tri3D.batchVertexCount == 0 )
+		return;
+
+	if( !g_remix.CreateMesh || !g_remix.DrawInstance )
+	{
+		s_tri3D.batchVertexCount = 0;
+		s_tri3D.batchIndexCount  = 0;
+		return;
+	}
+
+	dynamic_mesh_slot_t *slot = R_AllocDynamicMeshSlot();
+	if( slot->handle && g_remix.DestroyMesh )
+	{
+		g_remix.DestroyMesh( slot->handle );
+		slot->handle = NULL;
+	}
+
+	unsigned int batchTex = s_tri3D.activeBatchTexture ? s_tri3D.activeBatchTexture : g_currentBoundTexture;
+	int mode = s_tri3D.activeBatchMode ? s_tri3D.activeBatchMode : ( s_tri3D.renderMode ? s_tri3D.renderMode : kRenderTransAdd );
+
+	// Additive sprite geometry (beams, client glow effects) goes to the path tracer with a
+	// self-illuminated material so it emits light; everything else stays a raster overlay
+	remixapi_MaterialHandle fxMat = NULL;
+	if( mode == kRenderTransAdd || mode == kRenderGlow )
+		fxMat = R_Textures_GetFxMaterial( batchTex );
+
+	remixapi_MaterialHandle mat = fxMat ? fxMat : R_GetSpriteMaterial( batchTex );
+
+	if( fxMat )
+	{
+		// Additive intensity is (rgb * alpha); coverage blending needs it in alpha instead,
+		// otherwise a dim or fading beam becomes a dark sheet
+		for( uint32_t i = 0; i < s_tri3D.batchVertexCount; i++ )
+		{
+			uint32_t c = s_tri3D.batchVertices[i].color;
+			uint32_t a = ( c >> 24 ) & 0xFF, r = ( c >> 16 ) & 0xFF, g = ( c >> 8 ) & 0xFF, b = c & 0xFF;
+			uint32_t m = Q_max( r, Q_max( g, b ) );
+			if( m == 0 )
+			{
+				s_tri3D.batchVertices[i].color = 0;
+				continue;
+			}
+			r = r * 255 / m; g = g * 255 / m; b = b * 255 / m;
+			a = a * m / 255;
+			s_tri3D.batchVertices[i].color = ( a << 24 ) | ( r << 16 ) | ( g << 8 ) | b;
 		}
 	}
-	else if( s_tri2D.primitive == TRI_TRIANGLES )
+
+	remixapi_MeshInfoSurfaceTriangles surface;
+	memset( &surface, 0, sizeof( surface ) );
+	surface.vertices_values   = s_tri3D.batchVertices;
+	surface.vertices_count    = s_tri3D.batchVertexCount;
+	surface.indices_values    = s_tri3D.batchIndices;
+	surface.indices_count     = s_tri3D.batchIndexCount;
+	surface.skinning_hasvalue = 0;
+	surface.material          = mat;
+
+	remixapi_MeshInfo meshInfo;
+	memset( &meshInfo, 0, sizeof( meshInfo ) );
+	meshInfo.sType           = REMIXAPI_STRUCT_TYPE_MESH_INFO;
+	meshInfo.hash            = slot->hash;
+	meshInfo.surfaces_values = &surface;
+	meshInfo.surfaces_count  = 1;
+
+	remixapi_ErrorCode err = g_remix.CreateMesh( &meshInfo, &slot->handle );
+	if( err == REMIXAPI_ERROR_CODE_SUCCESS && slot->handle )
 	{
-		for( int i = 0; i + 2 < s_tri2D.vertexCount; i += 3 )
+		remixapi_InstanceRasterStateEXT rasterState;
+		remixapi_InstanceInfoBlendEXT blendExt;
+		remixapi_InstanceIdentityEXT identExt;
+		if( fxMat )
 		{
-			R_UI_EmitQuad(
-				s_tri2D.tempVerts[i+0][0], s_tri2D.tempVerts[i+0][1], s_tri2D.tempUVs[i+0][0], s_tri2D.tempUVs[i+0][1],
-				s_tri2D.tempVerts[i+1][0], s_tri2D.tempVerts[i+1][1], s_tri2D.tempUVs[i+1][0], s_tri2D.tempUVs[i+1][1],
-				s_tri2D.tempVerts[i+2][0], s_tri2D.tempVerts[i+2][1], s_tri2D.tempUVs[i+2][0], s_tri2D.tempUVs[i+2][1],
-				s_tri2D.tempVerts[i+2][0], s_tri2D.tempVerts[i+2][1], s_tri2D.tempUVs[i+2][0], s_tri2D.tempUVs[i+2][1],
-				textureId,
-				s_tri2D.tempColors[i+0],
-				flags
-			);
+			// Coverage blend; the FX texture's alpha carries the additive brightness
+			R_SetupSpriteBlendState( &blendExt, &identExt, &rasterState, slot->hash, kRenderTransAlpha );
+			identExt.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT;
 		}
-	}
-	else if( s_tri2D.primitive == TRI_TRIANGLE_FAN || s_tri2D.primitive == TRI_POLYGON )
-	{
-		for( int i = 1; i + 1 < s_tri2D.vertexCount; i++ )
+		else
 		{
-			R_UI_EmitQuad(
-				s_tri2D.tempVerts[0][0],   s_tri2D.tempVerts[0][1],   s_tri2D.tempUVs[0][0],   s_tri2D.tempUVs[0][1],
-				s_tri2D.tempVerts[i][0],   s_tri2D.tempVerts[i][1],   s_tri2D.tempUVs[i][0],   s_tri2D.tempUVs[i][1],
-				s_tri2D.tempVerts[i+1][0], s_tri2D.tempVerts[i+1][1], s_tri2D.tempUVs[i+1][0], s_tri2D.tempUVs[i+1][1],
-				s_tri2D.tempVerts[i+1][0], s_tri2D.tempVerts[i+1][1], s_tri2D.tempUVs[i+1][0], s_tri2D.tempUVs[i+1][1],
-				textureId,
-				s_tri2D.tempColors[0],
-				flags
-			);
+			R_SetupSpriteBlendState( &blendExt, &identExt, &rasterState, slot->hash, mode );
 		}
+
+		remixapi_Transform identityTransform;
+		memset( &identityTransform, 0, sizeof( identityTransform ) );
+		identityTransform.matrix[0][0] = 1.0f;
+		identityTransform.matrix[1][1] = 1.0f;
+		identityTransform.matrix[2][2] = 1.0f;
+
+		remixapi_InstanceInfo inst;
+		memset( &inst, 0, sizeof( inst ) );
+		inst.sType         = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
+		inst.pNext         = &identExt;
+		inst.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE;
+		inst.mesh          = slot->handle;
+		inst.transform     = identityTransform;
+		inst.doubleSided   = 1;
+
+		g_remix.DrawInstance( &inst );
 	}
+
+	s_tri3D.batchVertexCount = 0;
+	s_tri3D.batchIndexCount  = 0;
+}
+
+void R_UI_FillTriAPI( triangleapi_t *api )
+{
+	if( !api )
+		return;
+
+	api->version       = TRI_API_VERSION;
+	api->RenderMode    = R_UI_TriRenderMode;
+	api->Begin         = R_UI_TriBegin;
+	api->End           = R_UI_TriEnd;
+	api->Color4f       = R_UI_TriColor4f;
+	api->Color4ub      = R_UI_TriColor4ub;
+	api->TexCoord2f    = R_UI_TriTexCoord2f;
+	api->Vertex3f      = R_UI_TriVertex3f;
+	api->Vertex3fv     = R_UI_TriVertex3fv;
+	api->Brightness    = R_UI_TriBrightness;
+	api->CullFace      = R_UI_TriCullFace;
+	api->SpriteTexture = R_UI_TriSpriteTexture;
+	api->WorldToScreen = R_UI_TriWorldToScreen;
 }
 
 /*
@@ -533,6 +981,8 @@ void R_UI_TriEnd( void )
  */
 void R_UI_EndFrame( void )
 {
+	R_UI_TriFlush();
+
 	if( !g_remix.SubmitUIDrawList )
 		return;
 

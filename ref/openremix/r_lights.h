@@ -15,6 +15,7 @@ extern "C" {
 
 #define MAX_STATIC_MAP_LIGHTS 2048
 #define MAX_ACTIVE_DLIGHTS    128
+#define R_OPENREMIX_MAX_DLIGHTS 32
 
 typedef struct parsed_light_s
 {

@@ -12,7 +12,25 @@ remix_texture_t g_remixTextures[MAX_REMIX_TEXTURES];
 static int      s_nextTexNum = 1;
 static remixapi_MaterialHandle s_defaultMaterial = NULL;
 static remixapi_TextureHandle  s_defaultTexture  = NULL;
-static cvar_t                 *rt_emis           = NULL;
+
+#define MAX_GLASS_TEXTURES 256
+static char s_glassTextures[MAX_GLASS_TEXTURES][32];
+static int  s_numGlassTextures = 0;
+
+static cvar_t *rt_emis         = NULL;
+static cvar_t *rt_glass        = NULL;
+static cvar_t *rt_fx_emis      = NULL;
+static cvar_t *rt_glass_texture = NULL;
+
+static void R_Textures_DestroyFx( remix_texture_t *entry );
+static cvar_t *rt_refr_glass   = NULL;
+static cvar_t *rt_glass_dist   = NULL;
+static cvar_t *rt_glass_thin   = NULL;
+static cvar_t *rt_glass_tint_r = NULL;
+static cvar_t *rt_glass_tint_g = NULL;
+static cvar_t *rt_glass_tint_b = NULL;
+
+static void R_Textures_GetBaseName( const char *src, char *dst, size_t dstSize );
 
 // 64-bit FNV-1a Hash
 static inline uint64_t R_HashString64( const char *str )
@@ -74,6 +92,7 @@ static void R_Textures_CreateDefaultMaterial( void )
 	opaqueExt.roughnessConstant = 0.85f;
 	opaqueExt.metallicConstant  = 0.0f;
 	opaqueExt.opacityConstant   = 1.0f;
+	opaqueExt.useDrawCallAlphaState = 1;
 	opaqueExt.alphaTestType     = 7; // ALWAYS (0 = NEVER would discard every texel)
 	opaqueExt.albedoConstant.x  = 1.0f;
 	opaqueExt.albedoConstant.y  = 1.0f;
@@ -97,6 +116,246 @@ static void R_Textures_CreateDefaultMaterial( void )
 	}
 }
 
+static remixapi_MaterialHandle s_glassMaterial = NULL;
+
+/*
+ * R_Textures_GlassTextured - Glass shows its texture (opaque-PBR coverage blend) instead of
+ * being clear refractive transmission
+ */
+qboolean R_Textures_GlassTextured( void )
+{
+	return rt_glass_texture && rt_glass_texture->value > 0.0f;
+}
+
+float R_Textures_GlassOpacity( void )
+{
+	return R_Textures_GlassTextured() ? bound( 0.01f, rt_glass_texture->value, 1.0f ) : 1.0f;
+}
+
+remixapi_MaterialHandle R_Textures_GetGlassMaterial( void )
+{
+	if( s_glassMaterial )
+		return s_glassMaterial;
+
+	if( !g_remix.CreateMaterial )
+		return NULL;
+
+	remixapi_MaterialInfoTranslucentEXT transExt;
+	memset( &transExt, 0, sizeof( transExt ) );
+	transExt.sType                   = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT;
+	transExt.pNext                   = NULL;
+	transExt.transmittanceTexture    = NULL;
+	transExt.refractiveIndex         = ( rt_refr_glass ? rt_refr_glass->value : 1.52f );
+	if( transExt.refractiveIndex < 1.0f ) transExt.refractiveIndex = 1.52f;
+
+	float tintR = ( rt_glass_tint_r ? rt_glass_tint_r->value : 0.98f );
+	float tintG = ( rt_glass_tint_g ? rt_glass_tint_g->value : 0.99f );
+	float tintB = ( rt_glass_tint_b ? rt_glass_tint_b->value : 1.0f );
+	transExt.transmittanceColor.x    = tintR;
+	transExt.transmittanceColor.y    = tintG;
+	transExt.transmittanceColor.z    = tintB;
+
+	float dist = ( rt_glass_dist ? rt_glass_dist->value : 2000.0f );
+	if( dist <= 0.0f ) dist = 2000.0f;
+	transExt.transmittanceMeasurementDistance = dist;
+
+	if( rt_glass_thin && rt_glass_thin->value > 0.0f )
+	{
+		transExt.thinWallThickness_hasvalue = 1;
+		transExt.thinWallThickness_value    = 0.005f;
+	}
+	else
+	{
+		transExt.thinWallThickness_hasvalue = 0;
+	}
+	transExt.useDiffuseLayer         = 0;
+
+	uint64_t matHash = R_HashString64( "__openremix_shared_glass_material__" );
+	remixapi_MaterialInfo matInfo;
+	memset( &matInfo, 0, sizeof( matInfo ) );
+	matInfo.sType         = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+	matInfo.pNext         = &transExt;
+	matInfo.hash          = matHash;
+	matInfo.albedoTexture = NULL;
+	matInfo.filterMode    = 1;
+	matInfo.wrapModeU     = 1;
+	matInfo.wrapModeV     = 1;
+
+	remixapi_ErrorCode err = g_remix.CreateMaterial( &matInfo, &s_glassMaterial );
+	if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: CreateMaterial for shared glass failed: %u\n", (unsigned)err );
+		s_glassMaterial = NULL;
+	}
+	else
+	{
+		gEngfuncs.Con_Printf( "^2ref_openremix: Created shared ray-traced glass material (handle %p)^7\n", (void *)s_glassMaterial );
+	}
+
+	return s_glassMaterial;
+}
+
+static void R_Textures_LoadMaterialsTxt( void )
+{
+	s_numGlassTextures = 0;
+
+	// Populate built-in standard Half-Life glass textures first
+	static const char *s_builtinGlass[] = {
+		"GLASS_BRIGHT",
+		"GLASS_DARK",
+		"GLASS_MED",
+		"GLASSBLUE1",
+		"GLASSBLUE2",
+		"GLASSGREEEN",
+		"GLASSGREEN",
+		"C1A1_WINDOW",
+		"LAB1_GLSS1",
+		"0GLASSBRICK",
+		"1GLASSBRICK",
+		"2GLASSBRICK",
+		"3GLASSBRICK",
+		"4GLASSBRICK"
+	};
+	for( size_t i = 0; i < sizeof( s_builtinGlass ) / sizeof( s_builtinGlass[0] ); i++ )
+	{
+		if( s_numGlassTextures < MAX_GLASS_TEXTURES )
+		{
+			Q_strncpy( s_glassTextures[s_numGlassTextures++], s_builtinGlass[i], 32 );
+		}
+	}
+
+	// Try loading sound/materials.txt through engine filesystem or direct file
+	fs_offset_t fileSize = 0;
+	byte *fileBuf = NULL;
+
+	if( gEngfuncs.fsapi && gEngfuncs.fsapi->LoadFileMalloc )
+	{
+		fileBuf = gEngfuncs.fsapi->LoadFileMalloc( "sound/materials.txt", &fileSize, false );
+	}
+
+	if( !fileBuf || fileSize <= 0 )
+	{
+		FILE *f = fopen( "valve/sound/materials.txt", "rb" );
+		if( !f ) f = fopen( "sound/materials.txt", "rb" );
+		if( f )
+		{
+			fseek( f, 0, SEEK_END );
+			long sz = ftell( f );
+			fseek( f, 0, SEEK_SET );
+			if( sz > 0 )
+			{
+				fileBuf = (byte *)malloc( sz + 1 );
+				if( fileBuf )
+				{
+					fread( fileBuf, 1, sz, f );
+					fileBuf[sz] = '\0';
+					fileSize = sz;
+				}
+			}
+			fclose( f );
+		}
+	}
+
+	if( fileBuf && fileSize > 0 )
+	{
+		const char *pos = (const char *)fileBuf;
+		const char *end = pos + fileSize;
+
+		while( pos < end )
+		{
+			// Skip whitespace
+			while( pos < end && ( *pos == ' ' || *pos == '\t' || *pos == '\r' || *pos == '\n' ) )
+				pos++;
+			if( pos >= end ) break;
+
+			// Skip comments
+			if( pos + 1 < end && pos[0] == '/' && pos[1] == '/' )
+			{
+				while( pos < end && *pos != '\n' ) pos++;
+				continue;
+			}
+
+			char matType = *pos++;
+			while( pos < end && ( *pos == ' ' || *pos == '\t' ) ) pos++;
+
+			char texName[64];
+			int nameLen = 0;
+			while( pos < end && *pos != ' ' && *pos != '\t' && *pos != '\r' && *pos != '\n' && nameLen < (int)sizeof( texName ) - 1 )
+			{
+				texName[nameLen++] = *pos++;
+			}
+			texName[nameLen] = '\0';
+
+			if( ( matType == 'Y' || matType == 'y' ) && nameLen > 0 )
+			{
+				// Check if already in list
+				qboolean exists = false;
+				for( int k = 0; k < s_numGlassTextures; k++ )
+				{
+					if( !Q_stricmp( s_glassTextures[k], texName ) )
+					{
+						exists = true;
+						break;
+					}
+				}
+				if( !exists && s_numGlassTextures < MAX_GLASS_TEXTURES )
+				{
+					Q_strncpy( s_glassTextures[s_numGlassTextures++], texName, 32 );
+				}
+			}
+
+			// Advance to end of line
+			while( pos < end && *pos != '\n' ) pos++;
+		}
+
+		free( fileBuf );
+	}
+
+	gEngfuncs.Con_Printf( "^2ref_openremix: Loaded %d glass textures from materials.txt & database^7\n",
+	                      s_numGlassTextures );
+}
+
+qboolean R_Textures_IsGlass( const char *name )
+{
+	if( !name || !*name )
+		return false;
+
+	if( rt_glass && rt_glass->value <= 0.0f )
+		return false;
+
+	char baseName[64];
+	R_Textures_GetBaseName( name, baseName, sizeof( baseName ) );
+
+	// Strip leading '{' if any (e.g. {glass)
+	const char *cleanName = baseName;
+	if( cleanName[0] == '{' )
+		cleanName++;
+
+	// 1. Check sound/materials.txt glass texture list ('Y')
+	for( int i = 0; i < s_numGlassTextures; i++ )
+	{
+		if( !Q_strnicmp( cleanName, s_glassTextures[i], 12 ) )
+			return true;
+	}
+
+	// 2. Case-insensitive heuristic check for glass / window keywords
+	char lower[64];
+	Q_strncpy( lower, cleanName, sizeof( lower ) );
+	for( char *p = lower; *p; p++ )
+	{
+		if( *p >= 'A' && *p <= 'Z' )
+			*p += ( 'a' - 'A' );
+	}
+
+	if( strstr( lower, "glass" ) || strstr( lower, "window" ) ||
+	    strstr( lower, "_gls" ) || strstr( lower, "glss" ) )
+	{
+		return true;
+	}
+
+	return false;
+}
+
 void R_Textures_Init( void )
 {
 	memset( g_remixTextures, 0, sizeof( g_remixTextures ) );
@@ -105,10 +364,24 @@ void R_Textures_Init( void )
 	s_defaultTexture  = NULL;
 
 	if( gEngfuncs.Cvar_Get )
-		rt_emis = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
+	{
+		rt_emis         = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
+		rt_glass        = gEngfuncs.Cvar_Get( "rt_glass", "1", FCVAR_ARCHIVE, "Enable OpenRemix ray-traced glass translucency" );
+		rt_glass_texture = gEngfuncs.Cvar_Get( "rt_glass_texture", "0.2", FCVAR_ARCHIVE, "Glass texture opacity: 0 = clear refractive glass, >0 = textured glass with reflections (applies on map load)" );
+		rt_fx_emis      = gEngfuncs.Cvar_Get( "rt_fx_emis", "4.0", FCVAR_ARCHIVE, "Emission intensity of path-traced additive effects (beams, glow sprites); applies on texture load" );
+		rt_refr_glass   = gEngfuncs.Cvar_Get( "rt_refr_glass", "1.52", FCVAR_ARCHIVE, "Glass index of refraction (matching xash-rt)" );
+		rt_glass_dist   = gEngfuncs.Cvar_Get( "rt_glass_dist", "2000.0", FCVAR_ARCHIVE, "Glass transmittance measurement distance" );
+		rt_glass_thin   = gEngfuncs.Cvar_Get( "rt_glass_thin", "0", FCVAR_ARCHIVE, "Force thin-wall glass sheet mode without refraction" );
+		rt_glass_tint_r = gEngfuncs.Cvar_Get( "rt_glass_tint_r", "0.98", FCVAR_ARCHIVE, "Glass transmittance color Red" );
+		rt_glass_tint_g = gEngfuncs.Cvar_Get( "rt_glass_tint_g", "0.99", FCVAR_ARCHIVE, "Glass transmittance color Green" );
+		rt_glass_tint_b = gEngfuncs.Cvar_Get( "rt_glass_tint_b", "1.00", FCVAR_ARCHIVE, "Glass transmittance color Blue" );
+	}
 
+	R_Textures_LoadMaterialsTxt();
 	R_Textures_CreateDefaultMaterial();
+	R_Textures_GetGlassMaterial();
 }
+
 
 void R_Textures_ClearMap( void )
 {
@@ -130,11 +403,14 @@ void R_Textures_ClearMap( void )
 			entry->texHandle = NULL;
 		}
 
+		R_Textures_DestroyFx( entry );
 		entry->registered = false;
 	}
 
 	s_nextTexNum = 1;
+	tr.particleTexture = 0;
 	R_Textures_CreateDefaultMaterial();
+	R_Textures_GetGlassMaterial();
 }
 
 void R_Textures_Shutdown( void )
@@ -145,6 +421,11 @@ void R_Textures_Shutdown( void )
 	{
 		g_remix.DestroyMaterial( s_defaultMaterial );
 		s_defaultMaterial = NULL;
+	}
+	if( s_glassMaterial && g_remix.DestroyMaterial )
+	{
+		g_remix.DestroyMaterial( s_glassMaterial );
+		s_glassMaterial = NULL;
 	}
 	if( s_defaultTexture && g_remix.DestroyTexture )
 	{
@@ -177,17 +458,37 @@ static void R_Textures_GetBaseName( const char *src, char *dst, size_t dstSize )
 		*dot = '\0';
 }
 
+/*
+ * R_Textures_FindExact - Full-name lookup only. Used for upload de-duplication, where the
+ * base-name fallback would alias unrelated textures (e.g. every "#HUD/x(one:00).spr" frame)
+ */
+static int R_Textures_FindExact( const char *name )
+{
+	if( !name || !*name )
+		return 0;
+
+	for( int i = 1; i < MAX_REMIX_TEXTURES; i++ )
+	{
+		if( g_remixTextures[i].registered && !Q_stricmp( g_remixTextures[i].name, name ) )
+			return i;
+	}
+
+	return 0;
+}
+
 int R_Textures_Find( const char *name )
 {
 	if( !name || !*name )
 		return 0;
 
 	// 1. Exact match
-	for( int i = 1; i < MAX_REMIX_TEXTURES; i++ )
-	{
-		if( g_remixTextures[i].registered && !Q_stricmp( g_remixTextures[i].name, name ) )
-			return i;
-	}
+	int exact = R_Textures_FindExact( name );
+	if( exact )
+		return exact;
+
+	// Engine-generated names (sprite frames, "#maps/..." miptex, "*particle") must match exactly
+	if( name[0] == '#' || name[0] == '*' )
+		return 0;
 
 	// 2. Base name match (e.g. matching "c2a4e_w1b" against "#maps/c1a0.bsp:c2a4e_w1b.mip")
 	char baseSearch[64];
@@ -218,6 +519,202 @@ const char *R_Textures_GetName( unsigned int texnum )
 	return NULL;
 }
 
+/*
+ * R_Textures_DestroyFx - Release a texture's additive FX variant
+ */
+static void R_Textures_DestroyFx( remix_texture_t *entry )
+{
+	if( entry->fxMatHandle && g_remix.DestroyMaterial )
+		g_remix.DestroyMaterial( entry->fxMatHandle );
+	if( entry->fxTexHandle && g_remix.DestroyTexture )
+		g_remix.DestroyTexture( entry->fxTexHandle );
+	if( entry->emisMatHandle && g_remix.DestroyMaterial )
+		g_remix.DestroyMaterial( entry->emisMatHandle );
+	entry->fxMatHandle   = NULL;
+	entry->fxTexHandle   = NULL;
+	entry->emisMatHandle = NULL;
+}
+
+/*
+ * R_Textures_CreateFx - Build the path-traced stand-in for an additive sprite frame.
+ * The path tracer only blends by coverage, so alpha becomes the texel's brightness
+ * (black = fully transparent) and RGB is normalized; coverage blending then gives
+ * c + dst * (1 - max(c)), close to additive. The material is self-illuminated so the
+ * effect glows with its texture * vertex colour and lights the scene.
+ */
+static void R_Textures_CreateFx( remix_texture_t *entry, const char *name, uint32_t width, uint32_t height, const byte *rgbaData )
+{
+	if( !g_remix.CreateTexture || !g_remix.CreateMaterial )
+		return;
+
+	uint32_t numPixels = width * height;
+	byte *fx = (byte *)Mem_Malloc( r_temppool, numPixels * 4 );
+	if( !fx )
+		return;
+
+	for( uint32_t i = 0; i < numPixels; i++ )
+	{
+		const byte *src = &rgbaData[i * 4];
+		byte m = Q_max( src[0], Q_max( src[1], src[2] ) );
+		// Respect texels the sprite itself marks transparent
+		m = (byte)( ( (uint32_t)m * src[3] ) / 255 );
+
+		if( m == 0 )
+		{
+			fx[i * 4 + 0] = fx[i * 4 + 1] = fx[i * 4 + 2] = fx[i * 4 + 3] = 0;
+			continue;
+		}
+
+		for( int c = 0; c < 3; c++ )
+			fx[i * 4 + c] = (byte)Q_min( 255, ( (uint32_t)src[c] * 255 ) / Q_max( 1, Q_max( src[0], Q_max( src[1], src[2] ) ) ) );
+		fx[i * 4 + 3] = m;
+	}
+
+	uint64_t fxHash = entry->texHash ^ 0xF00DFACE0BEA0000ULL;
+
+	remixapi_TextureInfoGenerateMipsEXT mipsExt;
+	memset( &mipsExt, 0, sizeof( mipsExt ) );
+	mipsExt.sType    = REMIXAPI_STRUCT_TYPE_TEXTURE_GENERATE_MIPS_EXT;
+	mipsExt.generate = 1;
+
+	remixapi_TextureInfo texInfo;
+	memset( &texInfo, 0, sizeof( texInfo ) );
+	texInfo.sType     = REMIXAPI_STRUCT_TYPE_TEXTURE_INFO;
+	texInfo.pNext     = &mipsExt;
+	texInfo.hash      = fxHash;
+	texInfo.width     = width;
+	texInfo.height    = height;
+	texInfo.depth     = 1;
+	texInfo.mipLevels = 1;
+	texInfo.format    = REMIXAPI_FORMAT_R8G8B8A8_UNORM;
+	texInfo.data      = fx;
+	texInfo.dataSize  = (uint64_t)numPixels * 4;
+
+	remixapi_ErrorCode err = g_remix.CreateTexture( &texInfo, &entry->fxTexHandle );
+	Mem_Free( fx );
+	if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		gEngfuncs.Con_Reportf( S_WARN "ref_openremix: CreateTexture (fx) failed for %s (code %u)\n", name, (unsigned)err );
+		entry->fxTexHandle = NULL;
+		return;
+	}
+
+	wchar_t hashStr[32];
+	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)fxHash );
+
+	remixapi_MaterialInfoSelfIlluminationEXT selfExt;
+	memset( &selfExt, 0, sizeof( selfExt ) );
+	selfExt.sType     = REMIXAPI_STRUCT_TYPE_MATERIAL_SELF_ILLUMINATION_EXT;
+	selfExt.mask      = REMIXAPI_SELF_ILLUMINATION_MASK_NONE_EXT;
+	selfExt.maskScale = 1.0f;
+
+	remixapi_MaterialInfoOpaqueEXT opaqueExt;
+	memset( &opaqueExt, 0, sizeof( opaqueExt ) );
+	opaqueExt.sType                 = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
+	opaqueExt.pNext                 = &selfExt;
+	opaqueExt.albedoConstant.x      = 1.0f;
+	opaqueExt.albedoConstant.y      = 1.0f;
+	opaqueExt.albedoConstant.z      = 1.0f;
+	opaqueExt.opacityConstant       = 1.0f;
+	opaqueExt.useDrawCallAlphaState = 1;
+	opaqueExt.alphaTestType         = 7; // ALWAYS
+
+	float intensity = rt_fx_emis ? rt_fx_emis->value : 4.0f;
+	if( intensity <= 0.0f )
+		intensity = 0.001f;
+
+	remixapi_MaterialInfo matInfo;
+	memset( &matInfo, 0, sizeof( matInfo ) );
+	matInfo.sType                   = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+	matInfo.pNext                   = &opaqueExt;
+	matInfo.hash                    = fxHash ^ 0x9E3779B97F4A7C15ULL;
+	matInfo.albedoTexture           = hashStr;
+	matInfo.emissiveIntensity       = intensity;
+	matInfo.emissiveColorConstant.x = 1.0f;
+	matInfo.emissiveColorConstant.y = 1.0f;
+	matInfo.emissiveColorConstant.z = 1.0f;
+	matInfo.filterMode              = 1; // Linear
+	matInfo.wrapModeU               = 1;
+	matInfo.wrapModeV               = 1;
+
+	err = g_remix.CreateMaterial( &matInfo, &entry->fxMatHandle );
+	if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		gEngfuncs.Con_Reportf( S_WARN "ref_openremix: CreateMaterial (fx) failed for %s (code %u)\n", name, (unsigned)err );
+		entry->fxMatHandle = NULL;
+	}
+}
+
+/*
+ * R_Textures_GetFxMaterial - Self-illuminated additive variant, or NULL if the texture has none
+ */
+remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum )
+{
+	if( texnum > 0 && texnum < MAX_REMIX_TEXTURES && g_remixTextures[texnum].registered )
+		return g_remixTextures[texnum].fxMatHandle;
+	return NULL;
+}
+
+/*
+ * R_Textures_GetEmissiveMaterial - Self-illuminated material sampling the texture as uploaded.
+ * Used for additive brush entities: coverage comes from the draw's texture factor (renderamt)
+ */
+remixapi_MaterialHandle R_Textures_GetEmissiveMaterial( unsigned int texnum )
+{
+	if( texnum == 0 || texnum >= MAX_REMIX_TEXTURES || !g_remixTextures[texnum].registered )
+		return NULL;
+
+	remix_texture_t *entry = &g_remixTextures[texnum];
+	if( entry->emisMatHandle || !entry->texHandle || !g_remix.CreateMaterial )
+		return entry->emisMatHandle;
+
+	wchar_t hashStr[32];
+	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)entry->texHash );
+
+	remixapi_MaterialInfoSelfIlluminationEXT selfExt;
+	memset( &selfExt, 0, sizeof( selfExt ) );
+	selfExt.sType     = REMIXAPI_STRUCT_TYPE_MATERIAL_SELF_ILLUMINATION_EXT;
+	selfExt.mask      = REMIXAPI_SELF_ILLUMINATION_MASK_NONE_EXT;
+	selfExt.maskScale = 1.0f;
+
+	remixapi_MaterialInfoOpaqueEXT opaqueExt;
+	memset( &opaqueExt, 0, sizeof( opaqueExt ) );
+	opaqueExt.sType                 = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
+	opaqueExt.pNext                 = &selfExt;
+	opaqueExt.albedoConstant.x      = 1.0f;
+	opaqueExt.albedoConstant.y      = 1.0f;
+	opaqueExt.albedoConstant.z      = 1.0f;
+	opaqueExt.opacityConstant       = 1.0f;
+	opaqueExt.useDrawCallAlphaState = 1;
+	opaqueExt.alphaTestType         = 7; // ALWAYS
+
+	float intensity = rt_fx_emis ? rt_fx_emis->value : 4.0f;
+	if( intensity <= 0.0f )
+		intensity = 0.001f;
+
+	remixapi_MaterialInfo matInfo;
+	memset( &matInfo, 0, sizeof( matInfo ) );
+	matInfo.sType                   = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+	matInfo.pNext                   = &opaqueExt;
+	matInfo.hash                    = entry->texHash ^ 0xE3155E1F00000000ULL;
+	matInfo.albedoTexture           = hashStr;
+	matInfo.emissiveIntensity       = intensity;
+	matInfo.emissiveColorConstant.x = 1.0f;
+	matInfo.emissiveColorConstant.y = 1.0f;
+	matInfo.emissiveColorConstant.z = 1.0f;
+	matInfo.filterMode              = 1; // Linear
+	matInfo.wrapModeU               = 1;
+	matInfo.wrapModeV               = 1;
+
+	if( g_remix.CreateMaterial( &matInfo, &entry->emisMatHandle ) != REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		gEngfuncs.Con_Reportf( S_WARN "ref_openremix: CreateMaterial (emissive) failed for %s\n", entry->name );
+		entry->emisMatHandle = NULL;
+	}
+
+	return entry->emisMatHandle;
+}
+
 remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum )
 {
 	if( texnum > 0 && texnum < MAX_REMIX_TEXTURES && g_remixTextures[texnum].registered )
@@ -237,7 +734,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		return 0;
 
 	// Check if already registered
-	int existing = R_Textures_Find( name );
+	int existing = R_Textures_FindExact( name );
 	if( existing > 0 && g_remixTextures[existing].matHandle )
 		return existing;
 
@@ -256,6 +753,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	entry->isCutout      = ( baseName[0] == '{' );
 	entry->isWater       = ( baseName[0] == '!' || baseName[0] == '*' );
 	entry->isSky         = ( !Q_strnicmp( baseName, "sky", 3 ) || !Q_strnicmp( baseName, "scrollsky", 9 ) );
+	entry->isGlass       = R_Textures_IsGlass( baseName );
 	entry->registered    = true;
 
 	// 1. Create OpenRemix 3D Texture
@@ -321,82 +819,134 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		sanitizedBuffer = NULL;
 	}
 
-	// 2. Create OpenRemix Material
-	remixapi_MaterialInfoOpaqueEXT opaqueExt;
-	memset( &opaqueExt, 0, sizeof( opaqueExt ) );
-	opaqueExt.sType             = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
-	opaqueExt.roughnessConstant = 0.85f;
-	opaqueExt.metallicConstant  = 0.0f;
-	opaqueExt.opacityConstant   = 1.0f;
-	opaqueExt.alphaTestType     = 7; // ALWAYS (0 = NEVER would discard every texel)
-	opaqueExt.albedoConstant.x  = 1.0f;
-	opaqueExt.albedoConstant.y  = 1.0f;
-	opaqueExt.albedoConstant.z  = 1.0f;
-
-	if( entry->isCutout )
-	{
-		opaqueExt.alphaTestType       = 4; // GREATER
-		opaqueExt.alphaReferenceValue = 127;
-	}
-
 	wchar_t hashStr[32];
 	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)texHash );
 
 	uint64_t matHash = texHash ^ 0x9E3779B97F4A7C15ULL;
 	entry->matHash   = matHash;
 
+	float emisMultiplier = ( rt_emis ? rt_emis->value : 1.0f );
+	if( emisMultiplier < 0.0f ) emisMultiplier = 0.0f;
+
+	// 2. Create OpenRemix Material
+	remixapi_MaterialInfoTranslucentEXT transExt;
+	remixapi_MaterialInfoOpaqueEXT opaqueExt;
+
+	// Clear glass: refractive transmission with no texture. Textured glass: the texture at
+	// rt_glass_texture opacity, smooth so it reflects (GoldSrc-style, no refraction).
+	qboolean clearGlass = entry->isGlass && !R_Textures_GlassTextured();
+
+	if( clearGlass )
+	{
+		memset( &transExt, 0, sizeof( transExt ) );
+		transExt.sType                   = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT;
+		transExt.pNext                   = NULL;
+		// For pure ray-traced refractive glass, transmittanceTexture must be NULL so Beer-Lambert
+		// does not absorb all background light based on dark legacy diffuse pixel colors.
+		transExt.transmittanceTexture    = NULL;
+		transExt.refractiveIndex         = ( rt_refr_glass ? rt_refr_glass->value : 1.52f );
+		if( transExt.refractiveIndex < 1.0f ) transExt.refractiveIndex = 1.52f;
+
+		float tintR = ( rt_glass_tint_r ? rt_glass_tint_r->value : 0.98f );
+		float tintG = ( rt_glass_tint_g ? rt_glass_tint_g->value : 0.99f );
+		float tintB = ( rt_glass_tint_b ? rt_glass_tint_b->value : 1.0f );
+		transExt.transmittanceColor.x    = tintR;
+		transExt.transmittanceColor.y    = tintG;
+		transExt.transmittanceColor.z    = tintB;
+
+		float dist = ( rt_glass_dist ? rt_glass_dist->value : 2000.0f );
+		if( dist <= 0.0f ) dist = 2000.0f;
+		transExt.transmittanceMeasurementDistance = dist;
+
+		if( rt_glass_thin && rt_glass_thin->value > 0.0f )
+		{
+			transExt.thinWallThickness_hasvalue = 1;
+			transExt.thinWallThickness_value    = 0.005f;
+		}
+		else
+		{
+			transExt.thinWallThickness_hasvalue = 0;
+		}
+		transExt.useDiffuseLayer         = 0;
+	}
+	else
+	{
+		memset( &opaqueExt, 0, sizeof( opaqueExt ) );
+		opaqueExt.sType             = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
+		opaqueExt.roughnessConstant = 0.85f;
+		opaqueExt.metallicConstant  = 0.0f;
+		opaqueExt.opacityConstant   = 1.0f;
+		opaqueExt.useDrawCallAlphaState = 1;
+		opaqueExt.alphaTestType     = 7; // ALWAYS (0 = NEVER would discard every texel)
+		opaqueExt.albedoConstant.x  = 1.0f;
+		opaqueExt.albedoConstant.y  = 1.0f;
+		opaqueExt.albedoConstant.z  = 1.0f;
+
+		if( entry->isCutout )
+		{
+			opaqueExt.alphaTestType       = 4; // GREATER
+			opaqueExt.alphaReferenceValue = 127;
+		}
+
+		if( entry->isGlass )
+		{
+			opaqueExt.opacityConstant   = R_Textures_GlassOpacity();
+			opaqueExt.roughnessConstant = 0.05f;
+		}
+	}
+
 	remixapi_MaterialInfo matInfo;
 	memset( &matInfo, 0, sizeof( matInfo ) );
 	matInfo.sType         = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
-	matInfo.pNext         = &opaqueExt;
+	matInfo.pNext         = clearGlass ? (void *)&transExt : (void *)&opaqueExt;
 	matInfo.hash          = matHash;
-	matInfo.albedoTexture = hashStr;
+	matInfo.albedoTexture = clearGlass ? NULL : hashStr;
 	matInfo.filterMode    = 1; // Linear
 	matInfo.wrapModeU     = 1; // Repeat
 	matInfo.wrapModeV     = 1; // Repeat
 
-	// Detect light fixtures and screens to enable self-illumination emission in the path tracer
-	char lowerBase[64];
-	Q_strncpy( lowerBase, baseName, sizeof( lowerBase ) );
-	for( char *p = lowerBase; *p; p++ )
+	if( !entry->isGlass )
 	{
-		if( *p >= 'A' && *p <= 'Z' )
-			*p += ( 'a' - 'A' );
-	}
+		// Detect light fixtures and screens to enable self-illumination emission in the path tracer
+		char lowerBase[64];
+		Q_strncpy( lowerBase, baseName, sizeof( lowerBase ) );
+		for( char *p = lowerBase; *p; p++ )
+		{
+			if( *p >= 'A' && *p <= 'Z' )
+				*p += ( 'a' - 'A' );
+		}
 
-	float emisMultiplier = ( rt_emis ? rt_emis->value : 1.0f );
-	if( emisMultiplier < 0.0f ) emisMultiplier = 0.0f;
+		qboolean isLightFixture = false;
+		qboolean isScreen = false;
 
-	qboolean isLightFixture = false;
-	qboolean isScreen = false;
+		if( strstr( lowerBase, "light" ) || strstr( lowerBase, "lght" ) ||
+		    strstr( lowerBase, "spot" ) || strstr( lowerBase, "lamp" ) ||
+		    strstr( lowerBase, "fifts_lgt" ) || strstr( lowerBase, "fifties_lgt" ) )
+		{
+			isLightFixture = true;
+		}
+		else if( strstr( lowerBase, "~" ) || strstr( lowerBase, "scrn" ) ||
+		         strstr( lowerBase, "comp" ) || strstr( lowerBase, "crt" ) )
+		{
+			isScreen = true;
+		}
 
-	if( strstr( lowerBase, "light" ) || strstr( lowerBase, "lght" ) ||
-	    strstr( lowerBase, "spot" ) || strstr( lowerBase, "lamp" ) ||
-	    strstr( lowerBase, "fifts_lgt" ) || strstr( lowerBase, "fifties_lgt" ) )
-	{
-		isLightFixture = true;
-	}
-	else if( strstr( lowerBase, "~" ) || strstr( lowerBase, "scrn" ) ||
-	         strstr( lowerBase, "comp" ) || strstr( lowerBase, "crt" ) )
-	{
-		isScreen = true;
-	}
-
-	if( isLightFixture && emisMultiplier > 0.0f )
-	{
-		matInfo.emissiveColorConstant.x = 1.0f;
-		matInfo.emissiveColorConstant.y = 1.0f;
-		matInfo.emissiveColorConstant.z = 1.0f;
-		matInfo.emissiveIntensity       = 150.0f * emisMultiplier;
-		matInfo.emissiveTexture         = hashStr;
-	}
-	else if( isScreen && emisMultiplier > 0.0f )
-	{
-		matInfo.emissiveColorConstant.x = 1.0f;
-		matInfo.emissiveColorConstant.y = 1.0f;
-		matInfo.emissiveColorConstant.z = 1.0f;
-		matInfo.emissiveIntensity       = 10.0f * emisMultiplier;
-		matInfo.emissiveTexture         = hashStr;
+		if( isLightFixture && emisMultiplier > 0.0f )
+		{
+			matInfo.emissiveColorConstant.x = 1.0f;
+			matInfo.emissiveColorConstant.y = 1.0f;
+			matInfo.emissiveColorConstant.z = 1.0f;
+			matInfo.emissiveIntensity       = 150.0f * emisMultiplier;
+			matInfo.emissiveTexture         = hashStr;
+		}
+		else if( isScreen && emisMultiplier > 0.0f )
+		{
+			matInfo.emissiveColorConstant.x = 1.0f;
+			matInfo.emissiveColorConstant.y = 1.0f;
+			matInfo.emissiveColorConstant.z = 1.0f;
+			matInfo.emissiveIntensity       = 10.0f * emisMultiplier;
+			matInfo.emissiveTexture         = hashStr;
+		}
 	}
 
 	// Optional PBR suffix detection: check for <name>_n, <name>_r, <name>_m, <name>_e
@@ -484,12 +1034,37 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			gEngfuncs.Con_Reportf( S_WARN "ref_openremix: CreateMaterial failed for %s (code %u)\n", name, (unsigned)err );
 			entry->matHandle = s_defaultMaterial;
 		}
+		else if( clearGlass )
+		{
+			gEngfuncs.Con_Printf( "^2ref_openremix: Created ray-traced glass material for '%s' (IOR=%.2f, dist=%.1f)^7\n",
+			                      name, transExt.refractiveIndex, transExt.transmittanceMeasurementDistance );
+		}
 	}
+
+	// World sprite frames ("#sprites/x.spr(...).spr", not "#HUD/...") get an additive FX variant
+	R_Textures_DestroyFx( entry );
+	if( name[0] == '#' && Q_strnicmp( name, "#HUD/", 5 ) && Q_stristr( name, ".spr" ) )
+		R_Textures_CreateFx( entry, name, width, height, rgbaData );
 
 	// 3. Register with 2D UI system so HUD and menus can draw this texture
 	R_UI_RegisterTexture( texnum, name, (int)width, (int)height, rgbaData, REMIXAPI_FORMAT_R8G8B8A8_UNORM );
 
 	return texnum;
+}
+
+/*
+ * R_Textures_ForceOpaque - Images without IMAGE_HAS_ALPHA are opaque. Paletted BMPs take
+ * "alpha" from the palette's reserved byte (usually 0); the GL renderer uploads them as RGB,
+ * so do the same or additive UI art (menu buttons) is invisible.
+ */
+static void R_Textures_ForceOpaque( rgbdata_t *pic, int originalFlags )
+{
+	if( FBitSet( originalFlags, IMAGE_HAS_ALPHA ) || !pic || !pic->buffer || pic->type != PF_RGBA_32 )
+		return;
+
+	size_t numPixels = (size_t)pic->width * pic->height;
+	for( size_t i = 0; i < numPixels; i++ )
+		pic->buffer[i * 4 + 3] = 255;
 }
 
 /*
@@ -501,7 +1076,7 @@ int GL_LoadTexture_Hook( const char *name, const byte *buf, size_t size, int fla
 		return 0;
 
 	// Check if already loaded
-	int existing = R_Textures_Find( name );
+	int existing = R_Textures_FindExact( name );
 	if( existing > 0 && g_remixTextures[existing].matHandle )
 		return existing;
 
@@ -513,6 +1088,7 @@ int GL_LoadTexture_Hook( const char *name, const byte *buf, size_t size, int fla
 	if( !pic )
 		return 0;
 
+	int originalFlags = pic->flags;
 	if( pic->type != PF_RGBA_32 && gEngfuncs.Image_Process )
 	{
 		gEngfuncs.Image_Process( &pic, 0, 0, IMAGE_FORCE_RGBA, 0.0f );
@@ -523,6 +1099,8 @@ int GL_LoadTexture_Hook( const char *name, const byte *buf, size_t size, int fla
 		if( pic && gEngfuncs.FS_FreeImage ) gEngfuncs.FS_FreeImage( pic );
 		return 0;
 	}
+
+	R_Textures_ForceOpaque( pic, originalFlags );
 
 	int texnum = R_Textures_UploadRGBA( name, pic->width, pic->height, pic->buffer, flags );
 
@@ -551,6 +1129,7 @@ int GL_LoadTextureFromBuffer_Hook( const char *name, rgbdata_t *pic, texFlags_t 
 		if( workingPic )
 		{
 			gEngfuncs.Image_Process( &workingPic, 0, 0, IMAGE_FORCE_RGBA, 0.0f );
+			R_Textures_ForceOpaque( workingPic, pic->flags );
 			freedCopy = true;
 		}
 		else
@@ -564,6 +1143,9 @@ int GL_LoadTextureFromBuffer_Hook( const char *name, rgbdata_t *pic, texFlags_t 
 	if( freedCopy && gEngfuncs.FS_FreeImage )
 		gEngfuncs.FS_FreeImage( workingPic );
 
+	if( !Q_strcmp( name, REF_PARTICLE_TEXTURE ) )
+		tr.particleTexture = texnum;
+
 	return texnum;
 }
 
@@ -575,7 +1157,11 @@ int GL_CreateTexture_Hook( const char *name, int width, int height, const void *
 	if( !buffer || width <= 0 || height <= 0 )
 		return 0;
 
-	return R_Textures_UploadRGBA( name, (uint32_t)width, (uint32_t)height, (const byte *)buffer, flags );
+	int texnum = R_Textures_UploadRGBA( name, (uint32_t)width, (uint32_t)height, (const byte *)buffer, flags );
+	if( !Q_strcmp( name, REF_PARTICLE_TEXTURE ) )
+		tr.particleTexture = texnum;
+
+	return texnum;
 }
 
 int GL_FindTexture_Hook( const char *name )
@@ -605,6 +1191,7 @@ void GL_FreeTexture_Hook( unsigned int texnum )
 				g_remix.DestroyTexture( entry->texHandle );
 				entry->texHandle = NULL;
 			}
+			R_Textures_DestroyFx( entry );
 			entry->registered = false;
 		}
 	}

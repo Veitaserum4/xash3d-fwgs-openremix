@@ -25,6 +25,7 @@ typedef struct bsp_submodel_mesh_s
 	char                name[16];     // e.g. "*1", "*2"
 	remixapi_MeshHandle meshHandle;   // OpenRemix BLAS mesh handle
 	uint64_t            hash;         // Unique 64-bit hash
+	qboolean            isGlass;      // True if submodel represents translucent glass
 } bsp_submodel_mesh_t;
 
 typedef struct bsp_state_s
@@ -40,6 +41,8 @@ typedef struct bsp_state_s
 	uint32_t            num_solid_entities;
 	cl_entity_t        *trans_entities[MAX_VISIBLE_PACKET];
 	uint32_t            num_trans_entities;
+	cl_entity_t        *beam_entities[MAX_VISIBLE_PACKET]; // server env_beams (ET_BEAM), drawn by CL_DrawBeams
+	uint32_t            num_beam_entities;
 } bsp_state_t;
 
 extern bsp_state_t g_bspState;

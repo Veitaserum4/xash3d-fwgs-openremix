@@ -5,6 +5,116 @@
 
 #include "r_local.h"
 #include "r_remix.h"
+#include "r_textures.h"
+#include "r_bsp.h"
+#include "r_studio.h"
+#include "r_ui.h"
+#include "r_sprite.h"
+#include "r_lights.h"
+
+// Menu/loading warm-up: set when R_RenderScene ran this frame
+static qboolean s_sceneRendered = false;
+static cvar_t  *rt_menu_warmup  = NULL;
+static remixapi_LightHandle s_warmupLight = NULL;
+
+/*
+ * Runtime settings exposed to the game menu (mainui "Ray Tracing" page).
+ * Pushed to OpenRemix only when they differ from the runtime's defaults at startup, or when
+ * changed, so settings saved from the F12 overlay are not overridden on every launch.
+ */
+typedef struct
+{
+	const char *cvar;
+	const char *defaultValue;
+	const char *description;
+	cvar_t     *ptr;
+	char        applied[32];
+} rt_setting_t;
+
+static rt_setting_t s_settings[] =
+{
+	{ "rt_upscaler",  "3", "Upscaler: 0 off, 1 auto, 2 FSR 3.1, 3 DLSS" },
+	{ "rt_vsync",     "0", "Vertical sync" },
+	{ "rt_framegen",  "0", "Frame generation" },
+};
+
+// Fog cvars are owned by r_lights.c; changes re-apply the volumetric configuration
+static const char *s_fogCvars[] = { "rt_fog", "rt_fog_distance", "rt_fog_scattering" };
+static char s_fogApplied[ARRAYSIZE( s_fogCvars )][32];
+
+static void R_Settings_Push( rt_setting_t *s )
+{
+	static const char *upscalers[] = { "off", "auto", "fsr31", "dlss" };
+	const char *key = NULL, *value = NULL;
+
+	if( !Q_strcmp( s->cvar, "rt_upscaler" ) )
+	{
+		key   = "rtx.native.pathtrace.upscaler";
+		value = upscalers[bound( 0, (int)s->ptr->value, (int)ARRAYSIZE( upscalers ) - 1 )];
+	}
+	else if( !Q_strcmp( s->cvar, "rt_vsync" ) )
+	{
+		key   = "rtx.native.vsync";
+		value = s->ptr->value > 0.0f ? "1" : "0";
+	}
+	else if( !Q_strcmp( s->cvar, "rt_framegen" ) )
+	{
+		key   = "rtx.native.frameGeneration";
+		value = s->ptr->value > 0.0f ? "1" : "0";
+	}
+
+	if( key && g_remix.SetConfigVariable )
+	{
+		remixapi_ErrorCode err = g_remix.SetConfigVariable( key, value );
+		if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+			gEngfuncs.Con_Printf( S_WARN "ref_openremix: %s = %s rejected: %s\n", key, value, R_Remix_GetErrorString( err ) );
+	}
+}
+
+static void R_Settings_Init( void )
+{
+	for( size_t i = 0; i < ARRAYSIZE( s_settings ); i++ )
+	{
+		rt_setting_t *s = &s_settings[i];
+		s->ptr = gEngfuncs.Cvar_Get( s->cvar, s->defaultValue, FCVAR_ARCHIVE, s->description );
+		// Leave the runtime's own (possibly overlay-saved) value alone unless the user chose otherwise
+		Q_strncpy( s->applied, s->defaultValue, sizeof( s->applied ) );
+	}
+
+	for( size_t i = 0; i < ARRAYSIZE( s_fogCvars ); i++ )
+	{
+		cvar_t *c = gEngfuncs.pfnGetCvarPointer( s_fogCvars[i] );
+		Q_strncpy( s_fogApplied[i], c ? c->string : "", sizeof( s_fogApplied[i] ) );
+	}
+}
+
+/*
+ * R_Settings_Sync - Apply menu/console changes to OpenRemix (called once per frame)
+ */
+static void R_Settings_Sync( void )
+{
+	for( size_t i = 0; i < ARRAYSIZE( s_settings ); i++ )
+	{
+		rt_setting_t *s = &s_settings[i];
+		if( !s->ptr || !Q_strcmp( s->ptr->string, s->applied ) )
+			continue;
+		Q_strncpy( s->applied, s->ptr->string, sizeof( s->applied ) );
+		R_Settings_Push( s );
+	}
+
+	qboolean fogChanged = false;
+	for( size_t i = 0; i < ARRAYSIZE( s_fogCvars ); i++ )
+	{
+		cvar_t *c = gEngfuncs.pfnGetCvarPointer( s_fogCvars[i] );
+		if( c && Q_strcmp( c->string, s_fogApplied[i] ) )
+		{
+			Q_strncpy( s_fogApplied[i], c->string, sizeof( s_fogApplied[i] ) );
+			fogChanged = true;
+		}
+	}
+	if( fogChanged )
+		R_Lights_UpdateVolumetrics();
+}
 
 const char *R_GetConfigName( void )
 {
@@ -110,6 +220,9 @@ qboolean R_Init( void )
 	R_Sprite_Init();
 	R_Lights_Init();
 
+	rt_menu_warmup = gEngfuncs.Cvar_Get( "rt_menu_warmup", "1", FCVAR_ARCHIVE, "Prepare the path tracer in the main menu instead of on first map load" );
+	R_Settings_Init();
+
 	tr.initialized = true;
 	tr.framecount = 0;
 
@@ -123,6 +236,10 @@ void R_Shutdown( void )
 		return;
 
 	gEngfuncs.Con_Printf( "ref_openremix: Shutting down...\n" );
+
+	if( s_warmupLight && g_remix.DestroyLight )
+		g_remix.DestroyLight( s_warmupLight );
+	s_warmupLight = NULL;
 
 	// Shutdown rendering subsystems
 	R_Lights_Shutdown();
@@ -189,6 +306,8 @@ void R_BeginFrame( qboolean clearScene )
 	// Update cursor confinement state
 	R_Remix_UpdateCursorClipping();
 
+	R_Settings_Sync();
+
 	tr.realtime  = gp_host ? gp_host->realtime : 0.0;
 	tr.frametime = gp_host ? gp_host->frametime : 0.0;
 	tr.framecount++;
@@ -197,6 +316,44 @@ void R_BeginFrame( qboolean clearScene )
 	// which runs BEFORE R_BeginFrame. Clearing here would discard every queued entity.
 	R_Sprite_BeginFrame();
 	R_UI_BeginFrame();
+	s_sceneRendered = false;
+}
+
+/*
+ * R_SubmitWarmupScene - Keep the path tracer compiling while in the menu.
+ * OpenRemix holds path tracer preparation until it sees a perspective world camera, and
+ * keys its pipelines on whether local lights exist. Without a map neither is submitted,
+ * so every shader compiled when the first map loaded. Submit a placeholder camera and a
+ * negligible sphere light so the same pipeline set the world uses is built here instead.
+ */
+static void R_SubmitWarmupScene( void )
+{
+	R_SetupCamera( NULL );
+
+	if( !g_remix.CreateLight || !g_remix.DrawLightInstance )
+		return;
+
+	if( !s_warmupLight )
+	{
+		remixapi_LightInfoSphereEXT sphereExt;
+		memset( &sphereExt, 0, sizeof( sphereExt ) );
+		sphereExt.sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+		sphereExt.position.x = -64.0f; // behind the placeholder camera
+		sphereExt.radius     = 1.0f;
+
+		remixapi_LightInfo lightInfo;
+		memset( &lightInfo, 0, sizeof( lightInfo ) );
+		lightInfo.sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+		lightInfo.pNext      = &sphereExt;
+		lightInfo.hash       = 0x5741524D55504C54ULL; // "WARMUPLT"
+		lightInfo.radiance.x = lightInfo.radiance.y = lightInfo.radiance.z = 0.001f;
+
+		if( g_remix.CreateLight( &lightInfo, &s_warmupLight ) != REMIXAPI_ERROR_CODE_SUCCESS )
+			s_warmupLight = NULL;
+	}
+
+	if( s_warmupLight )
+		g_remix.DrawLightInstance( s_warmupLight );
 }
 
 void GL_RenderFrame( const struct ref_viewpass_s *rvp )
@@ -437,6 +594,11 @@ void R_RenderScene( void )
 	if( !tr.initialized )
 		return;
 
+	s_sceneRendered = true;
+
+	// Reset dynamic mesh allocator at start of scene
+	R_Sprite_BeginFrame();
+
 	// Setup camera basis using GoldSrc coordinates
 	R_SetupCamera( &RI.rvp );
 
@@ -460,6 +622,13 @@ void R_RenderScene( void )
 
 	// Draw moving and static brush entities (doors, triggers, platforms, grates)
 	R_BSP_DrawEntities();
+
+	// Draw 3D normal triangles from client DLL (world-space resonance cascade effects, beams)
+	if( FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) && gEngfuncs.pfnDrawNormalTriangles )
+	{
+		gEngfuncs.pfnDrawNormalTriangles();
+		R_UI_TriFlush();
+	}
 
 	// Draw studio models and sprites queued for this frame
 	for( uint32_t i = 0; i < g_bspState.num_solid_entities; i++ )
@@ -494,6 +663,13 @@ void R_RenderScene( void )
 		}
 	}
 
+	// Draw 3D transparent triangles from client DLL (shockwaves, energy rings, custom client effects)
+	if( FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) && gEngfuncs.pfnDrawTransparentTriangles )
+	{
+		gEngfuncs.pfnDrawTransparentTriangles();
+		R_UI_TriFlush();
+	}
+
 	// Draw local player viewmodel
 	R_DrawViewModel();
 
@@ -501,8 +677,13 @@ void R_RenderScene( void )
 	if( gEngfuncs.CL_DrawEFX )
 	{
 		gEngfuncs.CL_DrawEFX( (float)tr.frametime, false );
+		R_UI_TriFlush();
 		gEngfuncs.CL_DrawEFX( (float)tr.frametime, true );
+		R_UI_TriFlush();
 	}
+
+	// Final flush for any remaining 3D TriAPI geometry
+	R_UI_TriFlush();
 
 	// Submit static map lights, sun, and dynamic lights (flashlight, explosions)
 	R_Lights_DrawFrame();
@@ -535,6 +716,9 @@ void R_EndFrame( void )
 {
 	if( !tr.initialized )
 		return;
+
+	if( !s_sceneRendered && !( rt_menu_warmup && rt_menu_warmup->value <= 0.0f ) )
+		R_SubmitWarmupScene();
 
 	// Submit 2D UI draw list (HUD, menus, console, VGUI)
 	R_UI_EndFrame();
