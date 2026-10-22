@@ -354,13 +354,14 @@ qboolean R_XRT_GetMaterial( const char *texname, xrt_material_t *out )
 	out->roughness = e->roughness;
 	out->emissive  = -1.0f;
 
-	// emissiveMult drives the visible glow; texture lights (lightIntensity) also light the
-	// room in XashRT, which Remix does through the same emission, so take the stronger one
+	// emissiveMult is the visible glow. lightIntensity is how much light XashRT casts from
+	// the surface; Remix lights the room from the same emission, so it only adds a little
+	// (it must not dominate, or screens and fixtures wash out to white)
 	float emis = -1.0f;
 	if( e->emissiveMult >= 0.0f )
 		emis = e->emissiveMult * ( rt_xrt_emis ? rt_xrt_emis->value : 100.0f );
 	if( e->lightIntensity >= 0.0f )
-		emis = Q_max( emis, e->lightIntensity * ( rt_xrt_light_emis ? rt_xrt_light_emis->value : 1.5f ) );
+		emis = Q_max( emis, 0.0f ) + e->lightIntensity * ( rt_xrt_light_emis ? rt_xrt_light_emis->value : 0.05f );
 	out->emissive = emis;
 
 	if( e->mirror )
@@ -430,6 +431,7 @@ typedef struct
 
 static xrt_ktx_t s_ktx[MAX_XRT_TEXTURES];
 static int       s_numKtx = 0;
+static int       s_ktxLoaded = 0, s_ktxFailed = 0;
 
 static remixapi_Format R_XRT_KtxFormat( uint32_t vkFormat )
 {
@@ -548,7 +550,20 @@ qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, w
 			return false;
 		slot = &s_ktx[s_numKtx++];
 		slot->hash  = hash;
-		slot->valid = R_XRT_CreateKtx( path, hash, &slot->handle ); // missing files are cached as invalid
+		// Missing files stay cached as invalid; files that exist but fail are reported
+		FILE *probe = R_XRT_Open( path );
+		if( probe )
+		{
+			fclose( probe );
+			slot->valid = R_XRT_CreateKtx( path, hash, &slot->handle );
+			if( slot->valid )
+				s_ktxLoaded++;
+			else
+			{
+				s_ktxFailed++;
+				gEngfuncs.Con_Printf( S_WARN "ref_openremix: could not load XashRT texture %s\n", path );
+			}
+		}
 	}
 
 	if( !slot->valid )
@@ -751,6 +766,8 @@ static qboolean R_XRT_SceneImage( int textureIndex, wchar_t *out, size_t outLen 
 	return ok;
 }
 
+static remixapi_MaterialHandle R_XRT_MirrorMaterial( void );
+
 static remixapi_MaterialHandle R_XRT_SceneMaterial( int index )
 {
 	if( index < 0 || index >= MAX_XRT_MATERIALS )
@@ -759,6 +776,11 @@ static remixapi_MaterialHandle R_XRT_SceneMaterial( int index )
 		return s_scene.materials[index];
 
 	const jval_t *m = J_At( J_Get( s_scene.gltf, "materials" ), index );
+
+	// Some mirrors are marked only by their material ("mirr", "mirr_inner", "mirrorlocker")
+	const char *matName = J_Str( J_Get( m, "name" ) );
+	if( matName && !Q_strnicmp( matName, "mirr", 4 ) )
+		return R_XRT_MirrorMaterial();
 	const jval_t *pbr = J_Get( m, "pbrMetallicRoughness" );
 	const jval_t *color = J_Get( pbr, "baseColorFactor" );
 	const jval_t *emis = J_Get( m, "emissiveFactor" );
@@ -810,7 +832,8 @@ static remixapi_MaterialHandle R_XRT_MirrorMaterial( void )
 	remixapi_MaterialInfoOpaqueEXT opaque;
 	memset( &opaque, 0, sizeof( opaque ) );
 	opaque.sType             = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
-	opaque.albedoConstant.x  = opaque.albedoConstant.y = opaque.albedoConstant.z = 0.95f;
+	// Full reflectance; smooth metal qualifies for primary surface replacement (PSR)
+	opaque.albedoConstant.x  = opaque.albedoConstant.y = opaque.albedoConstant.z = 1.0f;
 	opaque.opacityConstant   = 1.0f;
 	opaque.metallicConstant  = 1.0f;
 	opaque.roughnessConstant = 0.0f;
@@ -1134,7 +1157,8 @@ void R_XRT_NewMap( const model_t *worldmodel )
 	free( s_scene.bin );
 	s_scene.bin = NULL;
 
-	gEngfuncs.Con_Printf( "^2ref_openremix: XashRT scene %s: %d objects, %d lights^7\n", mapname, s_scene.numInstances, s_scene.numLights );
+	gEngfuncs.Con_Printf( "^2ref_openremix: XashRT scene %s: %d objects, %d lights (replacement textures: %d loaded, %d failed)^7\n",
+	                      mapname, s_scene.numInstances, s_scene.numLights, s_ktxLoaded, s_ktxFailed );
 }
 
 void R_XRT_DrawScene( void )
@@ -1172,7 +1196,7 @@ void R_XRT_Init( void )
 {
 	rt_xrt              = gEngfuncs.Cvar_Get( "rt_xrt", "1", FCVAR_ARCHIVE, "Use XashRT content from the rt/ folder (materials, textures, map additions); applies on map load" );
 	rt_xrt_emis         = gEngfuncs.Cvar_Get( "rt_xrt_emis", "100", FCVAR_ARCHIVE, "Emission strength per XashRT emissiveMult" );
-	rt_xrt_light_emis   = gEngfuncs.Cvar_Get( "rt_xrt_light_emis", "1.5", FCVAR_ARCHIVE, "Emission strength per XashRT texture lightIntensity" );
+	rt_xrt_light_emis   = gEngfuncs.Cvar_Get( "rt_xrt_light_glow", "0.05", FCVAR_ARCHIVE, "Extra emission per XashRT texture lightIntensity" );
 	rt_xrt_scene_lights = gEngfuncs.Cvar_Get( "rt_xrt_scene_lights", "16", FCVAR_ARCHIVE, "Brightness of XashRT hand-placed map lights (per watt)" );
 
 	if( !s_texEntries )
