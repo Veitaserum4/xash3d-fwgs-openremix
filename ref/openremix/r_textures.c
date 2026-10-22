@@ -6,6 +6,7 @@
 #include "r_local.h"
 #include "r_remix.h"
 #include "r_textures.h"
+#include "r_xashrt.h"
 #include "r_ui.h"
 
 remix_texture_t g_remixTextures[MAX_REMIX_TEXTURES];
@@ -378,6 +379,7 @@ void R_Textures_Init( void )
 	}
 
 	R_Textures_LoadMaterialsTxt();
+	R_XRT_Init();
 	R_Textures_CreateDefaultMaterial();
 	R_Textures_GetGlassMaterial();
 }
@@ -415,6 +417,7 @@ void R_Textures_ClearMap( void )
 
 void R_Textures_Shutdown( void )
 {
+	R_XRT_Shutdown();
 	R_Textures_ClearMap();
 
 	if( s_defaultMaterial && g_remix.DestroyMaterial )
@@ -754,6 +757,12 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	entry->isWater       = ( baseName[0] == '!' || baseName[0] == '*' );
 	entry->isSky         = ( !Q_strnicmp( baseName, "sky", 3 ) || !Q_strnicmp( baseName, "scrollsky", 9 ) );
 	entry->isGlass       = R_Textures_IsGlass( baseName );
+
+	// XashRT content (rt/): material overrides and replacement textures
+	xrt_material_t xrtMat;
+	qboolean hasXrt = R_XRT_GetMaterial( name, &xrtMat );
+	if( hasXrt && xrtMat.glass )
+		entry->isGlass = true;
 	entry->registered    = true;
 
 	// 1. Create OpenRemix 3D Texture
@@ -893,19 +902,41 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			opaqueExt.opacityConstant   = R_Textures_GlassOpacity();
 			opaqueExt.roughnessConstant = 0.05f;
 		}
+
+		if( hasXrt && xrtMat.metallic >= 0.0f )
+			opaqueExt.metallicConstant = xrtMat.metallic;
+		if( hasXrt && xrtMat.roughness >= 0.0f )
+			opaqueExt.roughnessConstant = xrtMat.roughness;
 	}
+
+	wchar_t xrtAlbedo[32], xrtEmissive[32];
+	const wchar_t *albedoPath = R_XRT_GetReplacementTexture( name, "", xrtAlbedo, ARRAYSIZE( xrtAlbedo ) ) ? xrtAlbedo : hashStr;
 
 	remixapi_MaterialInfo matInfo;
 	memset( &matInfo, 0, sizeof( matInfo ) );
 	matInfo.sType         = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
 	matInfo.pNext         = clearGlass ? (void *)&transExt : (void *)&opaqueExt;
 	matInfo.hash          = matHash;
-	matInfo.albedoTexture = clearGlass ? NULL : hashStr;
+	matInfo.albedoTexture = clearGlass ? NULL : albedoPath;
 	matInfo.filterMode    = 1; // Linear
 	matInfo.wrapModeU     = 1; // Repeat
 	matInfo.wrapModeV     = 1; // Repeat
 
-	if( !entry->isGlass )
+	if( !entry->isGlass && R_XRT_Active() )
+	{
+		// XashRT: emissiveMult / texture lights, masked by the _e map when one exists
+		qboolean hasEmissiveMap = R_XRT_GetReplacementTexture( name, "_e", xrtEmissive, ARRAYSIZE( xrtEmissive ) );
+		float strength = ( hasXrt && xrtMat.emissive > 0.0f ) ? xrtMat.emissive : hasEmissiveMap ? 10.0f : 0.0f;
+		if( strength > 0.0f && emisMultiplier > 0.0f )
+		{
+			matInfo.emissiveColorConstant.x = 1.0f;
+			matInfo.emissiveColorConstant.y = 1.0f;
+			matInfo.emissiveColorConstant.z = 1.0f;
+			matInfo.emissiveIntensity       = strength * emisMultiplier;
+			matInfo.emissiveTexture         = hasEmissiveMap ? xrtEmissive : albedoPath;
+		}
+	}
+	else if( !entry->isGlass )
 	{
 		// Detect light fixtures and screens to enable self-illumination emission in the path tracer
 		char lowerBase[64];
@@ -1207,17 +1238,26 @@ void GL_UpdateTexture_Hook( int texnum, int cols, int rows, int width, int heigh
 /*
  * Mod_StudioLoadTextures_Hook - Called by engine when studio model is loaded
  */
+// Model being loaded by Mod_StudioLoadTextures_Hook, used to name its textures
+static char s_studioModelName[128];
+
 void Mod_StudioLoadTextures_Hook( model_t *mod, void *data )
 {
 	studiohdr_t *phdr = (studiohdr_t *)data;
 	if( !phdr || phdr->textureindex <= 0 || phdr->numtextures <= 0 )
 		return;
 
+	// Same naming as the GL renderer: "#models/barney/BX_Chrome1.mdl"
+	Q_strncpy( s_studioModelName, mod ? mod->name : "", sizeof( s_studioModelName ) );
+	COM_StripExtension( s_studioModelName );
+
 	mstudiotexture_t *ptexture = (mstudiotexture_t *)((byte *)phdr + phdr->textureindex);
 	for( int i = 0; i < phdr->numtextures; i++ )
 	{
 		R_Textures_GetOrCreateForStudio( &ptexture[i], phdr );
 	}
+
+	s_studioModelName[0] = '\0';
 }
 
 /*
@@ -1322,7 +1362,19 @@ remixapi_MaterialHandle R_Textures_GetOrCreateForStudio( mstudiotexture_t *ptext
 			return g_remixTextures[ptexture->index].matHandle;
 	}
 
-	int existing = R_Textures_Find( ptexture->name );
+	char texName[192];
+	if( s_studioModelName[0] )
+	{
+		char base[64];
+		COM_FileBase( ptexture->name, base, sizeof( base ) );
+		Q_snprintf( texName, sizeof( texName ), "#%s/%s.mdl", s_studioModelName, base );
+	}
+	else
+	{
+		Q_strncpy( texName, ptexture->name, sizeof( texName ) );
+	}
+
+	int existing = R_Textures_FindExact( texName );
 	if( existing > 0 && g_remixTextures[existing].matHandle )
 	{
 		ptexture->index = existing;
@@ -1351,7 +1403,7 @@ remixapi_MaterialHandle R_Textures_GetOrCreateForStudio( mstudiotexture_t *ptext
 		rgba[i * 4 + 3] = ( isMasked && palIdx == 255 ) ? 0 : 255;
 	}
 
-	int texnum = R_Textures_UploadRGBA( ptexture->name, (uint32_t)ptexture->width, (uint32_t)ptexture->height, rgba, ptexture->flags );
+	int texnum = R_Textures_UploadRGBA( texName, (uint32_t)ptexture->width, (uint32_t)ptexture->height, rgba, ptexture->flags );
 	Mem_Free( rgba );
 
 	ptexture->index = texnum;

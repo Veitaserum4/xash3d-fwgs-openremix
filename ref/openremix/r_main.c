@@ -11,6 +11,7 @@
 #include "r_ui.h"
 #include "r_sprite.h"
 #include "r_lights.h"
+#include "r_xashrt.h"
 
 // Menu/loading warm-up: set when R_RenderScene ran this frame
 static qboolean s_sceneRendered = false;
@@ -280,6 +281,7 @@ void R_NewMap( void )
 	R_StudioNewMap();
 	R_Sprite_NewMap();
 	R_Lights_NewMap( tr.worldmodel ? tr.worldmodel->entities : NULL );
+	R_XRT_NewMap( tr.worldmodel );
 
 	// Request DXVK / OpenRemix memory compaction and VRAM cleanup
 	if( g_remix.RequestVramCompaction )
@@ -687,6 +689,9 @@ void R_RenderScene( void )
 
 	// Submit static map lights, sun, and dynamic lights (flashlight, explosions)
 	R_Lights_DrawFrame();
+
+	// XashRT map additions: mirrors, props and hand-placed lights
+	R_XRT_DrawScene();
 }
 
 void R_Set2DMode( qboolean enable )
