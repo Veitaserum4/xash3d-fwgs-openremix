@@ -671,8 +671,12 @@ static void R_StudioSubmitMeshToRemix( int bodypartIdx, int submodelIdx, int mes
 
 	int entIndex = ( RI.currententity ) ? ( RI.currententity->index ? RI.currententity->index : (int)( ( (uintptr_t)RI.currententity >> 4 ) & 0x7FFF ) ) : 0;
 	const char *modName = ( RI.currentmodel ) ? RI.currentmodel->name : "studio";
-	uint64_t geomHash = R_StudioMakeGeometryHash( entIndex, bodypartIdx, submodelIdx, meshIdx );
 	uint64_t modHash  = R_StudioMakeReplacementHash( modName, bodypartIdx, submodelIdx, meshIdx );
+	// The model is part of the identity: a player's weapon (p_*.mdl) is drawn for the same
+	// entity, and equal mesh indices would otherwise give two instances one id per frame.
+	uint64_t geomHash = R_StudioMakeGeometryHash( entIndex, bodypartIdx, submodelIdx, meshIdx ) ^ ( ( modHash << 1 ) | ( modHash >> 63 ) );
+	if( !geomHash )
+		geomHash = 1ULL;
 
 	remixapi_MeshInfo meshInfo;
 	memset( &meshInfo, 0, sizeof( meshInfo ) );
@@ -1304,6 +1308,15 @@ void R_DrawPlayerBody( void )
 	cl_entity_t *e = CL_GetEntityByIndex( gp_cl->playernum + 1 );
 	if( !e || !e->player || !e->model || e->model->type != mod_studio || FBitSet( e->curstate.effects, EF_NODRAW ) )
 		return;
+
+	// Some frames pass the local player anyway (level transitions, death): drawing it twice
+	// would submit two instances with the same identity, which the runtime rejects.
+	for( uint32_t i = 0; i < g_bspState.num_solid_entities; i++ )
+		if( g_bspState.solid_entities[i] == e )
+			return;
+	for( uint32_t i = 0; i < g_bspState.num_trans_entities; i++ )
+		if( g_bspState.trans_entities[i] == e )
+			return;
 
 	R_StudioSetupTimings();
 	RI.currententity = e;
