@@ -53,7 +53,7 @@ static FILE *R_XRT_Open( const char *path )
 	return f;
 }
 
-static byte *R_XRT_ReadFile( const char *path, size_t *outSize )
+byte *R_XRT_ReadFile( const char *path, size_t *outSize )
 {
 	FILE *f = R_XRT_Open( path );
 	if( !f )

@@ -72,6 +72,7 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_emis` | 1 | Glow of light fixtures and screens |
 | `rt_xrt` | 1 | Use XashRT content from `rt/` |
 | `rt_xrt_scene_lights` | 16 | Brightness of XashRT's extra map lights |
+| `rt_ies` | 1 | IES light profiles for the flashlight and map spotlights; `rt/ies/flashlight.ies` and `rt/ies/spotlight.ies` replace the built-in ones |
 | `rt_sun` | 50 | Strength of the map's sun (`light_environment`) |
 | `rt_sky_brightness` | 8 | Sky brightness (skybox or scrolling clouds) |
 | `rt_sky_light` | 1 | Light the sky casts on the scene (0 = none) |

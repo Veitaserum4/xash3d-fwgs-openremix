@@ -6,11 +6,82 @@
 #include "r_local.h"
 #include "r_lights.h"
 #include "r_remix.h"
+#include "r_xashrt.h"
 
 lights_state_t g_lights;
 
 // Lighting CVars
 static cvar_t *rt_sun              = NULL;
+static cvar_t *rt_ies              = NULL;
+
+/*
+ * IES photometric profiles (IESNA LM-63) for shaped lights: how bright a light is at each angle
+ * from its axis. rt/ies/flashlight.ies and rt/ies/spotlight.ies replace these built-in ones.
+ */
+enum { IES_FLASHLIGHT, IES_SPOTLIGHT, IES_COUNT };
+
+// A handheld LED torch: a tight hotspot, the reflector's ring around it, then soft spill
+static const char s_iesFlashlight[] =
+	"IESNA:LM-63-2002\n"
+	"[TEST] ref_openremix built-in\n"
+	"[LUMINAIRE] Flashlight (approximation)\n"
+	"TILT=NONE\n"
+	"1 -1 1 15 1 1 1 0 0 0\n"
+	"1 1 3\n"
+	"0 2 4 6 8 9 10 12 15 20 25 30 35 40 90\n"
+	"0\n"
+	"1000 990 900 620 540 600 420 260 190 140 90 45 15 0 0\n";
+
+// A ceiling spot or downlight: broad and smooth, gone by 80 degrees
+static const char s_iesSpotlight[] =
+	"IESNA:LM-63-2002\n"
+	"[TEST] ref_openremix built-in\n"
+	"[LUMINAIRE] Spotlight (approximation)\n"
+	"TILT=NONE\n"
+	"1 -1 1 10 1 1 1 0 0 0\n"
+	"1 1 60\n"
+	"0 10 20 30 40 50 60 70 80 90\n"
+	"0\n"
+	"1000 970 880 700 450 220 80 20 0 0\n";
+
+static struct
+{
+	byte    *file; // the rt/ies override, if any
+	size_t   size;
+	qboolean loaded;
+} s_ies[IES_COUNT];
+
+/*
+ * R_Lights_GetIes - The profile for a kind of light, as a LightInfo extension; false with rt_ies 0
+ */
+static qboolean R_Lights_GetIes( int which, remixapi_LightInfoIesProfileEXT *ext )
+{
+	if( !rt_ies || rt_ies->value <= 0.0f )
+		return false;
+
+	static const char *const files[IES_COUNT] = { "rt/ies/flashlight.ies", "rt/ies/spotlight.ies" };
+	if( !s_ies[which].loaded )
+	{
+		s_ies[which].loaded = true;
+		s_ies[which].file = R_XRT_ReadFile( files[which], &s_ies[which].size );
+		if( s_ies[which].file )
+			gEngfuncs.Con_Printf( "ref_openremix: IES profile %s\n", files[which] );
+	}
+
+	memset( ext, 0, sizeof( *ext ));
+	ext->sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_IES_PROFILE_EXT;
+	if( s_ies[which].file )
+	{
+		ext->data = (const char *)s_ies[which].file;
+		ext->size = s_ies[which].size;
+	}
+	else
+	{
+		ext->data = which == IES_FLASHLIGHT ? s_iesFlashlight : s_iesSpotlight;
+		ext->size = which == IES_FLASHLIGHT ? sizeof( s_iesFlashlight ) - 1 : sizeof( s_iesSpotlight ) - 1;
+	}
+	return true;
+}
 static cvar_t *rt_sun_diameter     = NULL;
 static cvar_t *rt_flsh             = NULL;
 static cvar_t *rt_flsh_radius      = NULL;
@@ -68,6 +139,7 @@ void R_Lights_Init( void )
 
 	if( gEngfuncs.Cvar_Get )
 	{
+		rt_ies             = gEngfuncs.Cvar_Get( "rt_ies", "1", FCVAR_ARCHIVE, "IES light profiles for the flashlight and spotlights (rt/ies/*.ies replace the built-in ones)" );
 		rt_sun             = gEngfuncs.Cvar_Get( "rt_sun", "50", FCVAR_ARCHIVE, "Sun irradiance for a white light_environment at brightness 255" );
 		rt_sun_diameter    = gEngfuncs.Cvar_Get( "rt_sun_diameter", "0.53", FCVAR_ARCHIVE, "Sun angular diameter in degrees" );
 		rt_flsh            = gEngfuncs.Cvar_Get( "rt_flsh", "800", FCVAR_ARCHIVE, "Player flashlight intensity" );
@@ -106,6 +178,12 @@ R_Lights_Shutdown
 */
 void R_Lights_Shutdown( void )
 {
+	for( int i = 0; i < IES_COUNT; i++ )
+	{
+		free( s_ies[i].file );
+		memset( &s_ies[i], 0, sizeof( s_ies[i] ));
+	}
+
 	if( g_remix.DestroyLight )
 	{
 		for( uint32_t i = 0; i < g_lights.static_lights_count; i++ )
@@ -311,10 +389,13 @@ void R_Lights_NewMap( const char *entities )
 					float srcRadius = ( rt_light_radius ? rt_light_radius->value : 8.0f );
 					if( srcRadius < 1.0f ) srcRadius = 1.0f;
 
+					remixapi_LightInfoIesProfileEXT iesExt;
+					const qboolean ies = dst->is_spot && R_Lights_GetIes( IES_SPOTLIGHT, &iesExt );
+
 					remixapi_LightInfoSphereEXT sphereExt;
 					memset( &sphereExt, 0, sizeof( sphereExt ) );
 					sphereExt.sType                   = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
-					sphereExt.pNext                   = NULL;
+					sphereExt.pNext                   = ies ? &iesExt : NULL;
 					sphereExt.position.x             = dst->origin[0];
 					sphereExt.position.y             = dst->origin[1];
 					sphereExt.position.z             = dst->origin[2];
@@ -531,6 +612,16 @@ static void R_Lights_SubmitFlashlight( void )
 	sphereExt.shaping_value.coneAngleDegrees = cone_angle;
 	sphereExt.shaping_value.coneSoftness     = 0.35f;
 	sphereExt.shaping_value.focusExponent    = 1.0f;
+
+	// With an IES profile the beam is the profile's: the cone only bounds it
+	remixapi_LightInfoIesProfileEXT iesExt;
+	if( R_Lights_GetIes( IES_FLASHLIGHT, &iesExt ))
+	{
+		sphereExt.pNext                          = &iesExt;
+		sphereExt.shaping_value.coneAngleDegrees = 60.0f;
+		sphereExt.shaping_value.coneSoftness     = 0.0f;
+		sphereExt.shaping_value.focusExponent    = 0.0f;
+	}
 
 	remixapi_LightInfo lightInfo;
 	memset( &lightInfo, 0, sizeof( lightInfo ) );
