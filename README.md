@@ -70,8 +70,9 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_emis` | 1 | Glow of light fixtures and screens |
 | `rt_xrt` | 1 | Use XashRT content from `rt/` |
 | `rt_xrt_scene_lights` | 16 | Brightness of XashRT's extra map lights |
-| `rt_sky_brightness` | 8 | Skybox brightness |
-| `rt_sky_light` | 1 | Light the skybox casts on the scene (0 = none) |
+| `rt_sun` | 2000 | Strength of the map's sun (`light_environment`) |
+| `rt_sky_brightness` | 8 | Sky brightness (skybox or scrolling clouds) |
+| `rt_sky_light` | 1 | Light the sky casts on the scene (0 = none) |
 | `rt_menu_warmup` | 1 | Prepare the path tracer in the main menu instead of at the first map load |
 
 Material settings (glass, glow, XashRT) take effect on the next map load.

@@ -64,7 +64,7 @@ const char             *R_Textures_GetName( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetEmissiveMaterial( unsigned int texnum );
-remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float brightness );
+remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float brightness, qboolean repeat );
 qboolean                R_Textures_GetAverageColor( unsigned int texnum, float color[3] );
 
 // Engine ref_interface_t hooks

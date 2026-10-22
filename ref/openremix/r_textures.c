@@ -676,10 +676,11 @@ static void R_Textures_CreateFx( remix_texture_t *entry, const char *name, uint3
 
 /*
  * R_Textures_CreateSkyMaterial - A skybox face's material: the sky layer shows texture * albedo
- * constant, so the constant is the sky's brightness against the lit world. Clamped at the edges
- * so faces do not bleed into each other. The caller destroys it.
+ * constant, so the constant is the sky's brightness against the lit world. Skybox faces are
+ * clamped at the edges so they do not bleed into each other; scrolling cloud layers repeat.
+ * The caller destroys it.
  */
-remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float brightness )
+remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float brightness, qboolean repeat )
 {
 	if( texnum == 0 || texnum >= MAX_REMIX_TEXTURES || !g_remixTextures[texnum].registered ||
 	    !g_remixTextures[texnum].texHandle || !g_remix.CreateMaterial )
@@ -702,11 +703,11 @@ remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float
 	memset( &matInfo, 0, sizeof( matInfo ) );
 	matInfo.sType         = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
 	matInfo.pNext         = &opaqueExt;
-	matInfo.hash          = entry->texHash ^ 0x5C1B0F0E5C1B0F0EULL ^ (uint64_t)( brightness * 1000.0f );
+	matInfo.hash          = entry->texHash ^ 0x5C1B0F0E5C1B0F0EULL ^ (uint64_t)( brightness * 1000.0f ) ^ ( repeat ? 0x8000000000000000ULL : 0 );
 	matInfo.albedoTexture = hashStr;
 	matInfo.filterMode    = 1; // Linear
-	matInfo.wrapModeU     = 3; // Clamp
-	matInfo.wrapModeV     = 3;
+	matInfo.wrapModeU     = repeat ? 1 : 3; // Wrap or clamp
+	matInfo.wrapModeV     = repeat ? 1 : 3;
 
 	remixapi_MaterialHandle handle = NULL;
 	if( g_remix.CreateMaterial( &matInfo, &handle ) != REMIXAPI_ERROR_CODE_SUCCESS )

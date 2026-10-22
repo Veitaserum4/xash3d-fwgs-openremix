@@ -152,11 +152,6 @@ static void R_ClearAllDecals_Stub( qboolean includePermanent )
 	(void)includePermanent;
 }
 
-static void R_SetSkyCloudsTextures_Stub( int solidskyTexture, int alphaskyTexture )
-{
-	(void)solidskyTexture;
-	(void)alphaskyTexture;
-}
 
 static void GL_SubdivideSurface_Stub( model_t *mod, msurface_t *fa )
 {
@@ -352,7 +347,7 @@ const ref_interface_t gReffuncs =
 	.R_StudioFillAPI       = R_StudioFillAPI,
 	.R_StudioSetDrawInterface = R_StudioSetDrawInterface,
 
-	.R_SetSkyCloudsTextures = R_SetSkyCloudsTextures_Stub,
+	.R_SetSkyCloudsTextures = R_Sky_SetClouds,
 	.GL_SubdivideSurface   = GL_SubdivideSurface_Stub,
 	.CL_RunLightStyles     = CL_RunLightStyles_Stub,
 
