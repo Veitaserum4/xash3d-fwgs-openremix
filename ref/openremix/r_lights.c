@@ -53,6 +53,158 @@ static struct
 } s_ies[IES_COUNT];
 
 /*
+ * The flashlight's cookie: a texture projected along its beam, the detail a profile cannot hold.
+ * rt/cookies/flashlight.png (or .tga/.jpg/.bmp/.dds) next to the executable replaces the built-in one.
+ */
+#define FLASHLIGHT_COOKIE_SIZE 256
+#define FLASHLIGHT_COOKIE_FOV  72.0f // its edge where the beam profile ends (36 degrees off axis)
+
+static cvar_t *rt_flsh_cookie = NULL;
+static struct
+{
+	wchar_t                path[512]; // what the light names: a file, or the built-in texture's hash
+	remixapi_TextureHandle builtin;
+	qboolean               ready;
+} s_flashlightCookie;
+
+static float R_Lights_CookieNoise( float x, float y )
+{
+	// Smooth value noise on an integer lattice
+	const int ix = (int)floorf( x ), iy = (int)floorf( y );
+	const float fx = x - ix, fy = y - iy;
+	float corner[4];
+	for( int i = 0; i < 4; i++ )
+	{
+		uint32_t h = (uint32_t)( ix + ( i & 1 )) * 73856093u ^ (uint32_t)( iy + ( i >> 1 )) * 19349663u;
+		h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+		corner[i] = ( h & 0xffff ) / 65535.0f;
+	}
+	const float sx = fx * fx * ( 3.0f - 2.0f * fx ), sy = fy * fy * ( 3.0f - 2.0f * fy );
+	const float top = corner[0] + ( corner[1] - corner[0] ) * sx, bottom = corner[2] + ( corner[3] - corner[2] ) * sx;
+	return top + ( bottom - top ) * sy;
+}
+
+// A ring around the centre: 1 at radius c, falling off over w
+static float R_Lights_CookieBand( float r, float c, float w )
+{
+	const float d = ( r - c ) / w;
+	return expf( -d * d );
+}
+
+/*
+ * The built-in cookie: an LED torch's beam as projected, with a slightly dim die at the centre,
+ * faint reflector rings and soft, uneven blotches; the beam profile does the radial falloff
+ */
+static remixapi_TextureHandle R_Lights_BuildFlashlightCookie( uint64_t hash )
+{
+	const int n = FLASHLIGHT_COOKIE_SIZE;
+	byte *pixels = (byte *)malloc( (size_t)n * n * 4 );
+	if( !pixels || !g_remix.CreateTexture )
+	{
+		free( pixels );
+		return NULL;
+	}
+
+	for( int y = 0; y < n; y++ )
+	{
+		for( int x = 0; x < n; x++ )
+		{
+			const float u = ( x + 0.5f ) / n * 2.0f - 1.0f, v = ( y + 0.5f ) / n * 2.0f - 1.0f;
+			const float r0 = sqrtf( u * u + v * v ); // 1 at the beam's edge
+			const float r = r0 + 0.025f * ( R_Lights_CookieNoise( u * 4.0f + 7.0f, v * 4.0f + 2.0f ) - 0.5f ); // rings wobble
+
+			float value = 1.0f;
+			value *= 1.0f - 0.15f * R_Lights_CookieBand( r0, 0.0f, 0.04f );   // the LED die
+			value *= 1.0f + 0.06f * R_Lights_CookieBand( r, 0.16f, 0.04f );    // the reflector's halo
+			value *= 1.0f - 0.12f * R_Lights_CookieBand( r, 0.26f, 0.045f );   // the gap before the spill
+			value *= 1.0f - 0.06f * R_Lights_CookieBand( r, 0.55f, 0.05f ) - 0.05f * R_Lights_CookieBand( r, 0.78f, 0.06f ); // spill rings
+			value *= 0.90f + 0.10f * R_Lights_CookieNoise( u * 5.0f + 11.0f, v * 5.0f + 3.0f ); // blotches
+			value *= 0.96f + 0.04f * R_Lights_CookieNoise( u * 20.0f, v * 20.0f );              // grain
+			value *= 1.0f - Q_max( 0.0f, ( r0 - 0.96f ) / 0.04f );                             // soft rim
+			value = bound( 0.0f, value, 1.0f );
+
+			// The spill's reflector light is a little warmer than the hotspot
+			const float warm = Q_min( r0, 1.0f ) * 0.06f;
+			byte *p = &pixels[( y * n + x ) * 4];
+			p[0] = (byte)( 255.0f * value );
+			p[1] = (byte)( 255.0f * value * ( 1.0f - warm * 0.5f ));
+			p[2] = (byte)( 255.0f * value * ( 1.0f - warm ));
+			p[3] = 255;
+		}
+	}
+
+	remixapi_TextureInfo info;
+	memset( &info, 0, sizeof( info ));
+	info.sType     = REMIXAPI_STRUCT_TYPE_TEXTURE_INFO;
+	info.hash      = hash;
+	info.width     = n;
+	info.height    = n;
+	info.depth     = 1;
+	info.mipLevels = 1;
+	info.format    = REMIXAPI_FORMAT_R8G8B8A8_UNORM;
+	info.data      = pixels;
+	info.dataSize  = (uint64_t)n * n * 4;
+
+	remixapi_TextureHandle handle = NULL;
+	if( g_remix.CreateTexture( &info, &handle ) != REMIXAPI_ERROR_CODE_SUCCESS )
+		handle = NULL;
+	free( pixels );
+	return handle;
+}
+
+/*
+ * R_Lights_GetFlashlightCookie - The flashlight's cookie, facing up along the view; false with
+ * rt_flsh_cookie 0 or without one
+ */
+static qboolean R_Lights_GetFlashlightCookie( remixapi_LightInfoCookieEXT *ext )
+{
+	if( !rt_flsh_cookie || rt_flsh_cookie->value <= 0.0f )
+		return false;
+
+	if( !s_flashlightCookie.ready )
+	{
+		s_flashlightCookie.ready = true;
+		s_flashlightCookie.path[0] = 0;
+#if defined( _WIN32 )
+		static const char *const files[] = { "flashlight.png", "flashlight.tga", "flashlight.jpg", "flashlight.bmp", "flashlight.dds" };
+		char exe[MAX_PATH];
+		DWORD len = GetModuleFileNameA( NULL, exe, sizeof( exe ));
+		char *slash = len ? strrchr( exe, '\\' ) : NULL;
+		for( size_t i = 0; slash && i < ARRAYSIZE( files ) && !s_flashlightCookie.path[0]; i++ )
+		{
+			char full[MAX_PATH];
+			Q_snprintf( full, sizeof( full ), "%.*s\\rt\\cookies\\%s", (int)( slash - exe ), exe, files[i] );
+			FILE *f = fopen( full, "rb" );
+			if( f )
+			{
+				fclose( f );
+				MultiByteToWideChar( CP_ACP, 0, full, -1, s_flashlightCookie.path, ARRAYSIZE( s_flashlightCookie.path ));
+				gEngfuncs.Con_Printf( "ref_openremix: flashlight cookie rt/cookies/%s\n", files[i] );
+			}
+		}
+#endif
+		if( !s_flashlightCookie.path[0] )
+		{
+			const uint64_t hash = 0x464C53484B4F4F43ULL; // "FLSHKOOC"
+			s_flashlightCookie.builtin = R_Lights_BuildFlashlightCookie( hash );
+			if( s_flashlightCookie.builtin )
+				_snwprintf( s_flashlightCookie.path, ARRAYSIZE( s_flashlightCookie.path ), L"0x%llx", (unsigned long long)hash );
+		}
+	}
+	if( !s_flashlightCookie.path[0] )
+		return false;
+
+	memset( ext, 0, sizeof( *ext ));
+	ext->sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_COOKIE_EXT;
+	ext->texture    = s_flashlightCookie.path;
+	ext->up.x       = RI.vup[0];
+	ext->up.y       = RI.vup[1];
+	ext->up.z       = RI.vup[2];
+	ext->fovDegrees = FLASHLIGHT_COOKIE_FOV;
+	return true;
+}
+
+/*
  * R_Lights_GetIes - The profile for a kind of light, as a LightInfo extension; false with rt_ies 0
  */
 static qboolean R_Lights_GetIes( int which, remixapi_LightInfoIesProfileEXT *ext )
@@ -140,10 +292,11 @@ void R_Lights_Init( void )
 
 	if( gEngfuncs.Cvar_Get )
 	{
+		rt_flsh_cookie     = gEngfuncs.Cvar_Get( "rt_flsh_cookie", "1", FCVAR_ARCHIVE, "Project a texture along the flashlight's beam (rt/cookies/flashlight.png replaces the built-in one)" );
 		rt_ies             = gEngfuncs.Cvar_Get( "rt_ies", "1", FCVAR_ARCHIVE, "IES light profiles for the flashlight and spotlights (rt/ies/*.ies replace the built-in ones)" );
 		rt_sun             = gEngfuncs.Cvar_Get( "rt_sun", "50", FCVAR_ARCHIVE, "Sun irradiance for a white light_environment at brightness 255" );
 		rt_sun_diameter    = gEngfuncs.Cvar_Get( "rt_sun_diameter", "0.53", FCVAR_ARCHIVE, "Sun angular diameter in degrees" );
-		rt_flsh            = gEngfuncs.Cvar_Get( "rt_flsh", "800", FCVAR_ARCHIVE, "Player flashlight intensity" );
+		rt_flsh            = gEngfuncs.Cvar_Get( "rt_flsh", "8000", FCVAR_ARCHIVE, "Player flashlight intensity" );
 		rt_flsh_radius     = gEngfuncs.Cvar_Get( "rt_flsh_radius", "2.0", FCVAR_ARCHIVE, "Player flashlight source radius" );
 		rt_flsh_angle      = gEngfuncs.Cvar_Get( "rt_flsh_angle", "25", FCVAR_ARCHIVE, "Player flashlight outer cone angle in degrees" );
 		rt_flsh_r          = gEngfuncs.Cvar_Get( "rt_flsh_r", "2.5", FCVAR_ARCHIVE, "Player flashlight right offset" );
@@ -184,6 +337,9 @@ void R_Lights_Shutdown( void )
 		free( s_ies[i].file );
 		memset( &s_ies[i], 0, sizeof( s_ies[i] ));
 	}
+	if( s_flashlightCookie.builtin && g_remix.DestroyTexture )
+		g_remix.DestroyTexture( s_flashlightCookie.builtin );
+	memset( &s_flashlightCookie, 0, sizeof( s_flashlightCookie ));
 
 	if( g_remix.DestroyLight )
 	{
@@ -577,8 +733,8 @@ static void R_Lights_SubmitFlashlight( void )
 	if( !g_remix.CreateLight )
 		return;
 
-	float flsh_intensity = ( rt_flsh ? rt_flsh->value : 800.0f );
-	if( flsh_intensity <= 0.0f ) flsh_intensity = 800.0f;
+	float flsh_intensity = ( rt_flsh ? rt_flsh->value : 8000.0f );
+	if( flsh_intensity <= 0.0f ) flsh_intensity = 8000.0f;
 
 	float src_radius = ( rt_flsh_radius ? rt_flsh_radius->value : 2.0f );
 	if( src_radius < 0.1f ) src_radius = 2.0f;
@@ -622,6 +778,14 @@ static void R_Lights_SubmitFlashlight( void )
 		sphereExt.shaping_value.coneAngleDegrees = 60.0f;
 		sphereExt.shaping_value.coneSoftness     = 0.0f;
 		sphereExt.shaping_value.focusExponent    = 0.0f;
+	}
+
+	// The cookie's texture across the beam, turning with the view
+	remixapi_LightInfoCookieEXT cookieExt;
+	if( R_Lights_GetFlashlightCookie( &cookieExt ))
+	{
+		cookieExt.pNext  = sphereExt.pNext;
+		sphereExt.pNext  = &cookieExt;
 	}
 
 	remixapi_LightInfo lightInfo;
