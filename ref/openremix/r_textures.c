@@ -1549,7 +1549,10 @@ remixapi_MaterialHandle R_Textures_GetOrCreateForStudio( mstudiotexture_t *ptext
 	if( !ptexture || !phdr )
 		return s_defaultMaterial;
 
-	if( ptexture->index > 0 && ptexture->index < MAX_REMIX_TEXTURES )
+	// After loading, index holds our texture number. While loading (s_studioModelName set)
+	// it is still the offset of the pixel data, which for small models is a valid-looking
+	// texture number of something else entirely (HEV textures on headcrabs): never trust it then
+	if( !s_studioModelName[0] && ptexture->index > 0 && ptexture->index < MAX_REMIX_TEXTURES )
 	{
 		if( g_remixTextures[ptexture->index].matHandle )
 			return g_remixTextures[ptexture->index].matHandle;
