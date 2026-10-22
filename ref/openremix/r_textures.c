@@ -675,6 +675,57 @@ static void R_Textures_CreateFx( remix_texture_t *entry, const char *name, uint3
 }
 
 /*
+ * R_Textures_CreateSkyMaterial - A skybox face's material: the sky layer shows texture * albedo
+ * constant, so the constant is the sky's brightness against the lit world. Clamped at the edges
+ * so faces do not bleed into each other. The caller destroys it.
+ */
+remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float brightness )
+{
+	if( texnum == 0 || texnum >= MAX_REMIX_TEXTURES || !g_remixTextures[texnum].registered ||
+	    !g_remixTextures[texnum].texHandle || !g_remix.CreateMaterial )
+		return NULL;
+
+	const remix_texture_t *entry = &g_remixTextures[texnum];
+	wchar_t hashStr[32];
+	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)entry->texHash );
+
+	remixapi_MaterialInfoOpaqueEXT opaqueExt;
+	memset( &opaqueExt, 0, sizeof( opaqueExt ) );
+	opaqueExt.sType            = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
+	opaqueExt.albedoConstant.x = brightness;
+	opaqueExt.albedoConstant.y = brightness;
+	opaqueExt.albedoConstant.z = brightness;
+	opaqueExt.opacityConstant  = 1.0f;
+	opaqueExt.alphaTestType    = 7; // ALWAYS
+
+	remixapi_MaterialInfo matInfo;
+	memset( &matInfo, 0, sizeof( matInfo ) );
+	matInfo.sType         = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+	matInfo.pNext         = &opaqueExt;
+	matInfo.hash          = entry->texHash ^ 0x5C1B0F0E5C1B0F0EULL ^ (uint64_t)( brightness * 1000.0f );
+	matInfo.albedoTexture = hashStr;
+	matInfo.filterMode    = 1; // Linear
+	matInfo.wrapModeU     = 3; // Clamp
+	matInfo.wrapModeV     = 3;
+
+	remixapi_MaterialHandle handle = NULL;
+	if( g_remix.CreateMaterial( &matInfo, &handle ) != REMIXAPI_ERROR_CODE_SUCCESS )
+		return NULL;
+	return handle;
+}
+
+/*
+ * R_Textures_GetAverageColor - The texture's mean linear colour
+ */
+qboolean R_Textures_GetAverageColor( unsigned int texnum, float color[3] )
+{
+	if( texnum == 0 || texnum >= MAX_REMIX_TEXTURES || !g_remixTextures[texnum].registered )
+		return false;
+	VectorCopy( g_remixTextures[texnum].avgColor, color );
+	return true;
+}
+
+/*
  * R_Textures_GetFxMaterial - Self-illuminated additive variant, or NULL if the texture has none
  */
 remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum )
@@ -846,6 +897,19 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	entry->isWater       = ( baseName[0] == '!' || baseName[0] == '*' );
 	entry->isSky         = ( !Q_strnicmp( baseName, "sky", 3 ) || !Q_strnicmp( baseName, "scrollsky", 9 ) );
 	entry->isGlass       = R_Textures_IsGlass( baseName );
+
+	// Mean linear colour, over at most about 4096 sampled texels
+	{
+		const uint32_t numPixels = width * height;
+		const uint32_t step = Q_max( 1u, numPixels / 4096u );
+		double sum[3] = { 0.0, 0.0, 0.0 };
+		uint32_t samples = 0;
+		for( uint32_t i = 0; i < numPixels; i += step, samples++ )
+			for( int c = 0; c < 3; c++ )
+				sum[c] += pow( rgbaData[i * 4 + c] / 255.0, 2.2 );
+		for( int c = 0; c < 3; c++ )
+			entry->avgColor[c] = samples ? (float)( sum[c] / samples ) : 0.0f;
+	}
 
 	// XashRT content (rt/): material overrides and replacement textures
 	xrt_material_t xrtMat;

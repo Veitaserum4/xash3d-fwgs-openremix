@@ -43,6 +43,9 @@ typedef struct remix_texture_s
 	qboolean                isTranslucent;
 	qboolean                isGlass;
 	qboolean                isSky;
+
+	// Mean colour, linear (sky environment light)
+	float                   avgColor[3];
 } remix_texture_t;
 
 extern remix_texture_t g_remixTextures[MAX_REMIX_TEXTURES];
@@ -61,6 +64,8 @@ const char             *R_Textures_GetName( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetEmissiveMaterial( unsigned int texnum );
+remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float brightness );
+qboolean                R_Textures_GetAverageColor( unsigned int texnum, float color[3] );
 
 // Engine ref_interface_t hooks
 int                     GL_LoadTexture_Hook( const char *name, const byte *buf, size_t size, int flags );

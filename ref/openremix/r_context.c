@@ -6,6 +6,7 @@
 #include "r_local.h"
 #include "r_textures.h"
 #include "r_ui.h"
+#include "r_sky.h"
 
 // Cached engine globals
 ref_api_t          gEngfuncs;
@@ -93,11 +94,6 @@ static void GL_ProcessTexture_Stub( int texnum, float gamma, int topColor, int b
 	(void)gamma;
 	(void)topColor;
 	(void)bottomColor;
-}
-
-static void R_SetupSky_Stub( int *skyboxTextures )
-{
-	(void)skyboxTextures;
 }
 
 static int WorldToScreen_Stub( const vec3_t world, vec3_t screen )
@@ -334,7 +330,7 @@ const ref_interface_t gReffuncs =
 	.R_GetTextureOriginalBuffer = R_GetTextureOriginalBuffer_Stub,
 	.GL_LoadTextureFromBuffer   = GL_LoadTextureFromBuffer_Hook,
 	.GL_ProcessTexture          = GL_ProcessTexture_Stub,
-	.R_SetupSky                 = R_SetupSky_Stub,
+	.R_SetupSky                 = R_Sky_Setup,
 
 	.R_Set2DMode           = R_UI_Set2DMode,
 	.R_Set2DOffset         = R_UI_Set2DOffset,

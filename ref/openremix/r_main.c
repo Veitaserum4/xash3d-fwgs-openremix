@@ -12,6 +12,7 @@
 #include "r_sprite.h"
 #include "r_lights.h"
 #include "r_xashrt.h"
+#include "r_sky.h"
 
 // Menu/loading warm-up: set when R_RenderScene ran this frame
 static qboolean s_sceneRendered = false;
@@ -234,6 +235,7 @@ qboolean R_Init( void )
 	R_UI_Init();
 	R_Sprite_Init();
 	R_Lights_Init();
+	R_Sky_Init();
 
 	rt_menu_warmup = gEngfuncs.Cvar_Get( "rt_menu_warmup", "1", FCVAR_ARCHIVE, "Prepare the path tracer in the main menu instead of on first map load" );
 	R_Settings_Init();
@@ -262,6 +264,7 @@ void R_Shutdown( void )
 	R_UI_Shutdown();
 	R_StudioShutdown();
 	R_BSP_Shutdown();
+	R_Sky_Shutdown();
 	R_Textures_Shutdown();
 
 	// Shutdown Remix renderer
@@ -464,6 +467,21 @@ void R_SetupCamera( const ref_viewpass_t *rvp )
 		}
 	}
 
+	// Rays that leave the world see the skybox's light
+	remixapi_CameraEnvironmentEXT environment;
+	memset( &environment, 0, sizeof( environment ) );
+	environment.sType = REMIXAPI_STRUCT_TYPE_CAMERA_ENVIRONMENT_EXT;
+	float skyRadiance[3];
+	if( rvp && R_Sky_GetEnvironment( skyRadiance ) )
+	{
+		environment.enabled    = 1;
+		environment.radiance.x = skyRadiance[0];
+		environment.radiance.y = skyRadiance[1];
+		environment.radiance.z = skyRadiance[2];
+		environment.pNext      = paramCamera.pNext;
+		paramCamera.pNext      = &environment;
+	}
+
 	remixapi_CameraInfo cameraInfo = { 0 };
 	cameraInfo.sType = REMIXAPI_STRUCT_TYPE_CAMERA_INFO;
 	cameraInfo.pNext = &paramCamera;
@@ -494,6 +512,10 @@ void R_SetupCamera( const ref_viewpass_t *rvp )
 		vmCameraInfo.type  = REMIXAPI_CAMERA_TYPE_VIEW_MODEL;
 
 		g_remix.SetupCamera( &vmCameraInfo );
+
+		// The skybox turns with the view around the sky camera at the origin
+		if( rvp )
+			R_Sky_SetupCamera( &paramCamera );
 	}
 }
 
@@ -641,6 +663,7 @@ void R_RenderScene( void )
 
 	// Draw static world mesh
 	R_BSP_DrawWorld();
+	R_Sky_Draw();
 
 	// Store efrags for static and fragmented entities in the world (doors, func_wall grates, etc.)
 	if( tr.worldmodel && tr.worldmodel->leafs && gEngfuncs.R_StoreEfrags )
