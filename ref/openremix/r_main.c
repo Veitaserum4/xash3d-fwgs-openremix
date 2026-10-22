@@ -201,6 +201,9 @@ qboolean R_Init( void )
 		gEngfuncs.Cbuf_AddText( "_windowed_mouse 0\n" );
 		gEngfuncs.Cbuf_AddText( "m_rawinput 1\n" );
 		gEngfuncs.Cbuf_AddText( "bind F12 openremix_menu\n" );
+		// Keep "~" WAD textures paletted so their fullbright pixels become the emission mask
+		// (latched: takes effect from the next map load)
+		gEngfuncs.Cbuf_AddText( "r_allow_wad3_luma 1\n" );
 	}
 
 	// 6. Cache engine parameters
