@@ -1092,10 +1092,14 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	qboolean hasOrm    = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_orm", xrtOrm, ARRAYSIZE( xrtOrm ) );
 	qboolean hasNormal = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_n", xrtNormal, ARRAYSIZE( xrtNormal ) );
 
-	// Studio textures (#<model>/<texture>.mdl) carry the model's texture flags; others carry TF_*
+	// Studio textures (#<model>/<texture>.mdl) carry the model's texture flags; others carry TF_*.
+	// Chrome is our fallback: XashRT's material for the texture, when it has one, comes first
 	const size_t nameLen = Q_strlen( name );
-	const qboolean chrome = rt_chrome && rt_chrome->value > 0.0f && !clearGlass && !waterBody && !hasOrm &&
-	                        FBitSet( flags, STUDIO_NF_CHROME ) && nameLen > 4 && !Q_stricmp( name + nameLen - 4, ".mdl" );
+	wchar_t xrtChromeAlbedo[32];
+	const qboolean chrome = rt_chrome && rt_chrome->value > 0.0f && !clearGlass && !waterBody &&
+	                        FBitSet( flags, STUDIO_NF_CHROME ) && nameLen > 4 && !Q_stricmp( name + nameLen - 4, ".mdl" ) &&
+	                        !hasXrt && !hasOrm && !hasNormal &&
+	                        !R_XRT_GetReplacementTexture( name, "", xrtChromeAlbedo, ARRAYSIZE( xrtChromeAlbedo ) );
 	remixapi_MaterialPbrRemapEXT pbrRemap;
 	remixapi_MaterialNormalEncodingEXT normalEnc;
 	memset( &pbrRemap, 0, sizeof( pbrRemap ) );
@@ -1175,8 +1179,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 
 		// Model chrome (STUDIO_NF_CHROME) faked reflections with view-dependent texture coordinates;
 		// the path tracer reflects the scene, so it becomes metal tinted by the texture's mean colour
-		// at rt_chrome_reflectance. These settings decide every chrome texture, XashRT's included
-		// (its near-mirror values were tuned for another renderer)
+		// at rt_chrome_reflectance (only where XashRT has no material for it, see above)
 		if( chrome )
 		{
 			const float reflectance = rt_chrome_reflectance ? bound( 0.0f, rt_chrome_reflectance->value, 1.0f ) : 0.6f;
