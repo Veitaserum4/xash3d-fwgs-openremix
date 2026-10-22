@@ -22,13 +22,9 @@ static const wchar_t *g_candidatePaths[] = {
 	L"ref\\remix.dll",
 	L"cl_dlls\\remix.dll",
 
-	// Development workspace relative and absolute paths
-	L"_work\\packages\\windows\\bin\\remix.dll",
-	L"..\\..\\UnityRTX\\OpenRemix\\_work\\packages\\windows\\bin\\remix.dll",
-	L"..\\UnityRTX\\OpenRemix\\_work\\packages\\windows\\bin\\remix.dll",
-	L"UnityRTX\\OpenRemix\\_work\\packages\\windows\\bin\\remix.dll",
+	// An OpenRemix build tree next to the game folder
+	L"..\\OpenRemix\\_work\\packages\\windows\\bin\\remix.dll",
 	L"..\\..\\OpenRemix\\_work\\packages\\windows\\bin\\remix.dll",
-	L"c:\\Users\\Jacob\\Desktop\\UnityRTX\\OpenRemix\\_work\\packages\\windows\\bin\\remix.dll",
 
 	NULL
 };

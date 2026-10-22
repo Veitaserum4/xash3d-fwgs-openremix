@@ -25,11 +25,8 @@ def configure(conf):
 	openremix_inc = conf.options.OPENREMIX_INCLUDE or os.environ.get('OPENREMIX_INCLUDE')
 	candidates = [
 		openremix_inc,
-		# Standard development worktree location:
-		'c:/Users/Jacob/Desktop/UnityRTX/OpenRemix/public/include',
-		# Relative from workspace root:
-		os.path.abspath(os.path.join(conf.path.abspath(), '../../../../UnityRTX/OpenRemix/public/include')),
-		os.path.abspath(os.path.join(conf.path.abspath(), '../../../UnityRTX/OpenRemix/public/include')),
+		# An OpenRemix checkout next to this repository:
+		os.path.abspath(os.path.join(conf.path.abspath(), '../../../OpenRemix/public/include')),
 		os.path.abspath(os.path.join(conf.path.abspath(), '../../OpenRemix/public/include')),
 	]
 

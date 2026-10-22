@@ -1,3 +1,81 @@
+# Xash3D FWGS + OpenRemix
+
+This fork adds `ref_openremix`, a path-traced renderer for Half-Life built on [OpenRemix](https://github.com/Veitaserum4/OpenRemix-J). The engine is unchanged from upstream Xash3D FWGS; the fork adds the renderer (`ref/openremix`) and a **Ray tracing** options page in the game menu.
+
+> This project uses AI-generated code.
+
+## Features
+
+- Path-traced world, brush entities and models, with the map's lights, the sun, the flashlight and dynamic lights (muzzle flashes, explosions).
+- Glowing light fixtures and screens light the room. Beams, glow sprites and sparks emit light too.
+- Refractive glass, and water with depth absorption, waves and an underwater view (Snell's window).
+- Mirrors and chrome with perfect reflections (primary surface replacement).
+- Optional [XashRT](https://github.com/sultim-t/xash-rt) content: material settings, HD textures, normal and roughness/metal maps, and extra map geometry and lights such as mirrors.
+- The original HUD and menus, plus upscaling (DLSS, FSR 3.1), DLSS frame generation and volumetric fog.
+
+## Requirements
+
+- Windows 10/11, x64.
+- A GPU with hardware ray tracing. DLSS and frame generation need a compatible NVIDIA GPU.
+- Half-Life from Steam (the `valve` folder).
+- 64-bit game libraries: Steam's `hl.dll`/`client.dll` are 32-bit, so build [hlsdk-portable](https://github.com/FWGS/hlsdk-portable) for x64.
+
+## Building
+
+**Build OpenRemix first.** Follow its README; on Windows that's `scripts/windows/build-remix.ps1` from a Visual Studio x64 Developer PowerShell with Clang and the Vulkan SDK. The engine build needs its headers (`public/include`), and the game needs its runtime (`_work/packages/windows/bin`).
+
+**Get the SDL3 Visual C++ development package** (`SDL3-devel-<version>-VC.zip`) from the [SDL releases](https://github.com/libsdl-org/SDL/releases). Extract it anywhere; waf expects its `include` and `lib/x64` layout.
+
+**Build the engine with the renderer** from a Visual Studio x64 Developer command prompt:
+
+```
+git clone --recursive <this repository>
+cd xash3d-fwgs-openremix
+waf configure -8 --enable-ref-openremix --use-sdl3 -s <SDL3 folder> --openremix-include=<OpenRemix>/public/include
+waf build
+waf install --destdir=<game folder>
+```
+
+`-8` builds 64-bit, which OpenRemix requires. Instead of `--openremix-include`, you can set the `OPENREMIX_INCLUDE` environment variable, or keep the OpenRemix checkout next to this repository as `OpenRemix`. Never use GitHub's ZIP downloads: they leave out the submodules.
+
+## Setting up the game folder
+
+1. Run `waf install`, or copy `xash3d.exe`, `xash.dll`, `filesystem_stdio.dll`, `ref_openremix.dll`, `menu.dll` and `SDL3.dll` into one folder.
+2. Copy the OpenRemix runtime next to them: everything in OpenRemix's `_work/packages/windows/bin` (`remix.dll`, `SDL3.dll`, the `dlss` folder).
+3. Put your 64-bit game libraries in `valve/cl_dlls` and `valve/dlls`.
+   - The engine loads the menu from `valve/cl_dlls/menu.dll` before the copy next to `xash3d.exe`. If you keep a `menu.dll` there, replace it with this build's.
+4. Run:
+
+   ```
+   xash3d.exe -ref openremix -basedir "<Steam>\steamapps\common\Half-Life" -game valve
+   ```
+
+   `-basedir` reads the game's content from your Steam install. Leave it out if the `valve` folder sits next to `xash3d.exe`.
+
+If `remix.dll` lives somewhere else, point the renderer at it with the `r_remix_path` cvar or the `REMIX_PATH` environment variable.
+
+### Optional: XashRT content
+
+Download `hl1-rt-resources.zip` from the [xash-rt 1.0.5 release](https://github.com/sultim-t/xash-rt/releases/tag/1.0.5) and extract its `rt` folder next to `xash3d.exe`. Only `rt/data`, `rt/scenes`, `rt/mat` (`gfx`, `resource` and `#HUD` can be skipped) and the files directly in `rt` are used. Leave out `rt/valve`: its HD crowbar model replaces the stock one. Turn the content off with `rt_xrt 0`.
+
+## Settings
+
+Most settings are in the game menu under **Options → Video → Ray tracing**: upscaler and DLSS quality, vsync, frame generation and its multiplier, volumetric fog, and glass. **F12** opens the full OpenRemix overlay. Console variables:
+
+| Cvar | Default | Effect |
+|---|---|---|
+| `rt_glass_texture` | 0.2 | Glass texture opacity; 0 = clear refractive glass |
+| `rt_water`, `rt_water_dist`, `rt_water_ior` | 1, 300, 1.333 | Ray-traced water, its clarity (units) and refraction |
+| `rt_fx_emis` | 4 | Glow of beams, sprites and sparks |
+| `rt_emis` | 1 | Glow of light fixtures and screens |
+| `rt_xrt` | 1 | Use XashRT content from `rt/` |
+| `rt_xrt_scene_lights` | 16 | Brightness of XashRT's extra map lights |
+| `rt_menu_warmup` | 1 | Prepare the path tracer in the main menu instead of at the first map load |
+
+Material settings (glass, glow, XashRT) take effect on the next map load.
+
+---
+
 > [!CAUTION]
 > **Only download Xash3D FWGS from official sources.** Third-party builds, "modded launchers", "optimized" repacks and random mirrors are frequently bundled with malware, miners, spyware and credential stealers. We cannot vouch for anything we did not build. Get official binaries only from the [releases page](https://github.com/FWGS/xash3d-fwgs/releases/tag/continuous).
 
