@@ -425,7 +425,10 @@ static void R_XRT_LoadTexturesJson( void )
 KTX2 replacement textures
 ==============================================================================
 */
-#define MAX_XRT_TEXTURES 1024
+// Every file looked up, found or not: each texture probes its replacement and _n, _orm and _e
+// maps, so a session's maps, models and HUD reach thousands (1024 filled up, and with it the
+// water's normal map went missing)
+#define MAX_XRT_TEXTURES 16384
 
 typedef struct
 {
@@ -567,7 +570,13 @@ qboolean R_XRT_GetFileTexture( const char *path, wchar_t *out, size_t outLen )
 	if( !slot )
 	{
 		if( s_numKtx >= MAX_XRT_TEXTURES )
+		{
+			static qboolean warned = false;
+			if( !warned )
+				gEngfuncs.Con_Printf( S_WARN "ref_openremix: XashRT texture table full (%d files), later ones are skipped\n", MAX_XRT_TEXTURES );
+			warned = true;
 			return false;
+		}
 		slot = &s_ktx[s_numKtx++];
 		slot->hash  = hash;
 		// Missing files stay cached as invalid; files that exist but fail are reported
