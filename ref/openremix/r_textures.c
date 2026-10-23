@@ -27,6 +27,19 @@ static cvar_t *rt_chrome        = NULL;
 static cvar_t *rt_liquid_emis   = NULL;
 static cvar_t *rt_texture_nearest = NULL;
 
+// Set while R_Textures_CheckSettings remakes the material of this texture slot (0: none)
+static int s_rebuildTexnum = 0;
+
+static void R_Textures_FreePixels( remix_texture_t *entry )
+{
+	if( entry->pixels )
+		Mem_Free( entry->pixels );
+	if( entry->pixelsName )
+		Mem_Free( entry->pixelsName );
+	entry->pixels     = NULL;
+	entry->pixelsName = NULL;
+}
+
 // Game textures' sampling: linear, or nearest (rt_texture_nearest) for the original's crisp texels
 static int R_Textures_FilterMode( void )
 {
@@ -423,7 +436,7 @@ void R_Textures_Init( void )
 		rt_glass_tint_r = gEngfuncs.Cvar_Get( "rt_glass_tint_r", "0.98", FCVAR_ARCHIVE, "Glass transmittance color Red" );
 		rt_glass_tint_g = gEngfuncs.Cvar_Get( "rt_glass_tint_g", "0.99", FCVAR_ARCHIVE, "Glass transmittance color Green" );
 		rt_glass_tint_b = gEngfuncs.Cvar_Get( "rt_glass_tint_b", "1.00", FCVAR_ARCHIVE, "Glass transmittance color Blue" );
-		rt_texture_nearest = gEngfuncs.Cvar_Get( "rt_texture_nearest", "0", FCVAR_ARCHIVE, "Nearest-neighbour texture filtering (crisp texels, as Half-Life without filtering); applies on map load" );
+		rt_texture_nearest = gEngfuncs.Cvar_Get( "rt_texture_nearest", "0", FCVAR_ARCHIVE, "Nearest-neighbour texture filtering (crisp texels, as Half-Life without filtering)" );
 		R_AutoPBR_Init();
 	}
 
@@ -455,6 +468,7 @@ void R_Textures_ClearMap( void )
 		}
 
 		R_Textures_DestroyFx( entry );
+		R_Textures_FreePixels( entry );
 		entry->registered = false;
 	}
 
@@ -971,9 +985,10 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	if( !name || width == 0 || height == 0 || !rgbaData )
 		return 0;
 
-	// Check if already registered
-	int existing = R_Textures_FindExact( name );
-	if( existing > 0 && g_remixTextures[existing].matHandle )
+	// Check if already registered (a rebuild names its slot: entry names are truncated)
+	const qboolean rebuild = s_rebuildTexnum > 0;
+	int existing = rebuild ? s_rebuildTexnum : R_Textures_FindExact( name );
+	if( existing > 0 && g_remixTextures[existing].matHandle && !rebuild )
 		return existing;
 
 	int texnum = existing > 0 ? existing : s_nextTexNum++;
@@ -1064,7 +1079,8 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	texInfo.data      = uploadData;
 	texInfo.dataSize  = (uint64_t)width * height * 4;
 
-	if( g_remix.CreateTexture )
+	// A rebuild remakes the material alone: the texture stays
+	if( g_remix.CreateTexture && !rebuild )
 	{
 		remixapi_ErrorCode err = g_remix.CreateTexture( &texInfo, &entry->texHandle );
 		if( err != REMIXAPI_ERROR_CODE_SUCCESS )
@@ -1513,10 +1529,59 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	if( name[0] == '#' && Q_strnicmp( name, "#HUD/", 5 ) && Q_stristr( name, ".spr" ) )
 		R_Textures_CreateFx( entry, name, width, height, rgbaData );
 
+	if( rebuild )
+		return texnum;
+
+	// Map and model textures keep their pixels: their material is remade (by the same hash,
+	// which OpenRemix swaps in wherever it is drawn) when a setting it depends on changes
+	R_Textures_FreePixels( entry );
+	if( studioTexture || ( nameLen > 4 && !Q_stricmp( name + nameLen - 4, ".mip" )))
+	{
+		entry->pixels = (byte *)Mem_Malloc( r_temppool, (size_t)width * height * 4 );
+		entry->pixelsName = (char *)Mem_Malloc( r_temppool, nameLen + 1 );
+		if( entry->pixels && entry->pixelsName )
+		{
+			memcpy( entry->pixels, rgbaData, (size_t)width * height * 4 );
+			memcpy( entry->pixelsName, name, nameLen + 1 );
+		}
+		else
+			R_Textures_FreePixels( entry );
+	}
+
 	// 3. Register with 2D UI system so HUD and menus can draw this texture
 	R_UI_RegisterTexture( texnum, name, (int)width, (int)height, rgbaData, REMIXAPI_FORMAT_R8G8B8A8_UNORM );
 
 	return texnum;
+}
+
+/*
+ * R_Textures_CheckSettings - Remakes map and model materials (from their kept pixels) when auto
+ * PBR or texture filtering changes, so the change shows at once instead of on the next map load
+ */
+void R_Textures_CheckSettings( void )
+{
+	qboolean changed = R_AutoPBR_SettingsChanged();
+	if( rt_texture_nearest && FBitSet( rt_texture_nearest->flags, FCVAR_CHANGED ))
+	{
+		ClearBits( rt_texture_nearest->flags, FCVAR_CHANGED );
+		changed = true;
+	}
+	if( !changed )
+		return;
+
+	int rebuilt = 0;
+	for( int i = 1; i < MAX_REMIX_TEXTURES; i++ )
+	{
+		remix_texture_t *entry = &g_remixTextures[i];
+		if( !entry->registered || !entry->pixels || !entry->pixelsName || !entry->matHandle )
+			continue;
+		s_rebuildTexnum = i;
+		R_Textures_UploadRGBA( entry->pixelsName, entry->width, entry->height, entry->pixels, entry->flags );
+		rebuilt++;
+	}
+	s_rebuildTexnum = 0;
+	if( rebuilt )
+		gEngfuncs.Con_Reportf( "ref_openremix: rebuilt %d materials for the new texture settings\n", rebuilt );
 }
 
 /*
@@ -1663,6 +1728,7 @@ void GL_FreeTexture_Hook( unsigned int texnum )
 				entry->texHandle = NULL;
 			}
 			R_Textures_DestroyFx( entry );
+			R_Textures_FreePixels( entry );
 			entry->registered = false;
 		}
 	}

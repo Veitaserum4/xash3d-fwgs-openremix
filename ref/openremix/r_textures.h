@@ -43,6 +43,11 @@ typedef struct remix_texture_s
 	// Normal map generated from the texture (r_autopbr.c)
 	remixapi_TextureHandle  normalTexHandle;
 
+	// Map and model textures' pixels and full name (name is truncated), kept to rebuild their
+	// material when settings change
+	byte                   *pixels;
+	char                   *pixelsName;
+
 	qboolean                registered;
 	qboolean                isCutout;
 	qboolean                isWater;
@@ -59,6 +64,8 @@ extern remix_texture_t g_remixTextures[MAX_REMIX_TEXTURES];
 void                    R_Textures_Init( void );
 void                    R_Textures_Shutdown( void );
 void                    R_Textures_ClearMap( void );
+// Rebuilds map and model materials when settings they depend on change (once a frame)
+void                    R_Textures_CheckSettings( void );
 
 qboolean                R_Textures_IsGlass( const char *name );
 remixapi_MaterialHandle R_Textures_GetGlassMaterial( void );

@@ -56,8 +56,23 @@ static const autopbr_category_t s_categories[] =
 
 void R_AutoPBR_Init( void )
 {
-	rt_autopbr         = gEngfuncs.Cvar_Get( "rt_autopbr", "0", FCVAR_ARCHIVE, "Experimental: infer PBR materials (metal, roughness, normal maps) for textures without XashRT or mod ones; applies on map load" );
-	rt_autopbr_normals = gEngfuncs.Cvar_Get( "rt_autopbr_normals", "1", FCVAR_ARCHIVE, "Strength of normal maps generated from textures (0 = none); applies on map load" );
+	rt_autopbr         = gEngfuncs.Cvar_Get( "rt_autopbr", "0", FCVAR_ARCHIVE, "Experimental: infer PBR materials (metal, roughness, normal maps) for textures without XashRT or mod ones" );
+	rt_autopbr_normals = gEngfuncs.Cvar_Get( "rt_autopbr_normals", "1", FCVAR_ARCHIVE, "Strength of normal maps generated from textures (0 = none)" );
+}
+
+qboolean R_AutoPBR_SettingsChanged( void )
+{
+	qboolean changed = false;
+	cvar_t *cvars[] = { rt_autopbr, rt_autopbr_normals };
+	for( size_t i = 0; i < ARRAYSIZE( cvars ); i++ )
+	{
+		if( cvars[i] && FBitSet( cvars[i]->flags, FCVAR_CHANGED ))
+		{
+			ClearBits( cvars[i]->flags, FCVAR_CHANGED );
+			changed = true;
+		}
+	}
+	return changed;
 }
 
 qboolean R_AutoPBR_Enabled( void )

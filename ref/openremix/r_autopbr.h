@@ -15,6 +15,8 @@ extern "C" {
 
 void     R_AutoPBR_Init( void );
 qboolean R_AutoPBR_Enabled( void );
+// Whether auto PBR's settings changed since the last call
+qboolean R_AutoPBR_SettingsChanged( void );
 
 // Texture material types from sound/materials.txt (footstep types: M metal, V vent, ...)
 void     R_AutoPBR_ClearTypes( void );

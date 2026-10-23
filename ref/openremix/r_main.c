@@ -379,6 +379,7 @@ void R_BeginFrame( qboolean clearScene )
 	R_Remix_UpdateCursorClipping();
 
 	R_Settings_Sync();
+	R_Textures_CheckSettings();
 
 	tr.realtime  = gp_host ? gp_host->realtime : 0.0;
 	tr.frametime = gp_host ? gp_host->frametime : 0.0;
