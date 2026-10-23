@@ -201,17 +201,19 @@ static qboolean R_BSP_IsSubmodelGlass( const model_t *submod, const char *subNam
 	// 2. Parse map entities string for this submodel's entity definition
 	if( tr.worldmodel && tr.worldmodel->entities && subName && subName[0] )
 	{
-		const char *pos = tr.worldmodel->entities;
+		const char *ents = tr.worldmodel->entities;
 		char targetModel[32];
 		Q_snprintf( targetModel, sizeof( targetModel ), "\"model\" \"%s\"", subName );
 
-		while( ( pos = strstr( pos, "{" ) ) != NULL )
+		// Each entity that names this model, within its own braces
+		for( const char *foundModel = strstr( ents, targetModel ); foundModel; foundModel = strstr( foundModel + 1, targetModel ))
 		{
-			const char *end = strstr( pos, "}" );
+			const char *pos = foundModel;
+			while( pos > ents && *pos != '{' )
+				pos--;
+			const char *end = strchr( foundModel, '}' );
 			if( !end ) break;
 
-			const char *foundModel = strstr( pos, targetModel );
-			if( foundModel && foundModel < end )
 			{
 				// Check rendermode: 2 = kRenderTransTexture, 1 = kRenderTransColor
 				const char *rm = strstr( pos, "\"rendermode\"" );
@@ -249,8 +251,6 @@ static qboolean R_BSP_IsSubmodelGlass( const model_t *submod, const char *subNam
 						return true;
 				}
 			}
-
-			pos = end + 1;
 		}
 	}
 
@@ -770,18 +770,15 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	}
 	else
 	{
+		// Decided once when the submodel's mesh was built (R_BSP_GetSubmodelMesh): the check
+		// scans the map's entity text, far too slow to repeat for every brush every frame
 		for( uint32_t i = 0; i < g_bspState.numSubmodels; i++ )
 		{
 			if( g_bspState.submodels[i].model == ent->model || !strcmp( g_bspState.submodels[i].name, ent->model->name ) )
 			{
-				if( g_bspState.submodels[i].isGlass )
-					isGlass = true;
+				isGlass = g_bspState.submodels[i].isGlass;
 				break;
 			}
-		}
-		if( !isGlass && R_BSP_IsSubmodelGlass( ent->model, ent->model->name ) )
-		{
-			isGlass = true;
 		}
 	}
 
