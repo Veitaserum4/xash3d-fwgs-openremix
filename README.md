@@ -64,7 +64,7 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 
 | Cvar | Default | Effect |
 |---|---|---|
-| `rt_glass_texture` | 0.2 | Glass texture opacity; 0 = clear refractive glass |
+| `rt_glass_texture` | 0.9 | Glass texture opacity; 0 = clear refractive glass |
 | `rt_water`, `rt_water_dist`, `rt_water_ior` | 1, 300, 1.333 | Ray-traced water, its clarity (units) and refraction |
 | `rt_water_fog` | 1 | Underwater fog density relative to Half-Life's (0 = clear) |
 | `rt_chrome`, `rt_chrome_reflectance`, `rt_chrome_roughness` | 1, 0.6, 0.3 | Model chrome without XashRT materials as real metal, its reflectance and roughness (`rt_chrome 0` = classic fake chrome) |
@@ -80,6 +80,8 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_menu_warmup` | 1 | Prepare the path tracer in the main menu instead of at the first map load |
 
 Material settings (glass, glow, XashRT) take effect on the next map load.
+
+Until you save a profile in the overlay, OpenRemix starts with Xash3D's look: DLSS Balanced, 8 bounces, exposure 0.53, bloom 0.11 (spread 0.43), ORCA on, and contrast before tonemapping at 1.41. A saved profile (`openremix/profiles/`) replaces these.
 
 ---
 

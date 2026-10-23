@@ -399,7 +399,7 @@ void R_Textures_Init( void )
 		rt_water        = gEngfuncs.Cvar_Get( "rt_water", "1", FCVAR_ARCHIVE, "Ray-traced water bodies (refraction, absorption, Snell's window); applies on map load" );
 		rt_water_dist   = gEngfuncs.Cvar_Get( "rt_water_dist", "300", FCVAR_ARCHIVE, "Water clarity: distance in units over which the water colour is absorbed once" );
 		rt_water_ior    = gEngfuncs.Cvar_Get( "rt_water_ior", "1.333", FCVAR_ARCHIVE, "Water index of refraction" );
-		rt_glass_texture = gEngfuncs.Cvar_Get( "rt_glass_texture", "0.2", FCVAR_ARCHIVE, "Glass texture opacity: 0 = clear refractive glass, >0 = textured glass with reflections (applies on map load)" );
+		rt_glass_texture = gEngfuncs.Cvar_Get( "rt_glass_texture", "0.9", FCVAR_ARCHIVE, "Glass texture opacity: 0 = clear refractive glass, >0 = textured glass with reflections (applies on map load)" );
 		rt_water_fog    = gEngfuncs.Cvar_Get( "rt_water_fog", "1", FCVAR_ARCHIVE, "Underwater fog density, relative to Half-Life's (0 = clear water); applies on map load" );
 		rt_chrome       = gEngfuncs.Cvar_Get( "rt_chrome", "1", FCVAR_ARCHIVE, "Model chrome as path-traced metal (0 = Half-Life's fake environment map); applies on model load" );
 		rt_chrome_roughness = gEngfuncs.Cvar_Get( "rt_chrome_roughness", "0.3", FCVAR_ARCHIVE, "Roughness of path-traced model chrome; applies on model load" );

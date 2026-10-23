@@ -39,12 +39,62 @@ static rt_setting_t s_settings[] =
 	{ "rt_vsync",     "0", "Vertical sync" },
 	{ "rt_framegen",  "0", "Frame generation" },
 	{ "rt_framegen_mult", "0", "Frame generation multiplier: 0 = 2x, 1 = 3x, 2 = 4x" },
-	{ "rt_dlss_quality",  "3", "DLSS quality: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance" },
+	{ "rt_dlss_quality",  "2", "DLSS quality: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance" },
 };
 
 // Fog cvars are owned by r_lights.c; changes re-apply the volumetric configuration
 static const char *s_fogCvars[] = { "rt_fog", "rt_fog_distance", "rt_fog_scattering" };
 static char s_fogApplied[ARRAYSIZE( s_fogCvars )][32];
+
+/*
+ * Xash3D's look for OpenRemix: applied at startup while no OpenRemix profile has been saved (a fresh
+ * install); once one is saved in the overlay (F12), the profile decides
+ */
+static const struct { const char *key, *value; } s_xashDefaults[] =
+{
+	{ "rtx.native.pathtrace.dlssQuality",    "balanced" }, // rt_dlss_quality 2
+	{ "rtx.native.pathtrace.bounces",        "8" },
+	{ "rtx.native.pathtrace.exposure",       "0.53" },
+	{ "rtx.native.pathtrace.bloomIntensity", "0.11" },
+	{ "rtx.native.pathtrace.bloomRadius",    "0.43" },
+	{ "rtx.native.pathtrace.orca",           "1" },
+	{ "rtx.native.pathtrace.contrast",       "1" },
+	{ "rtx.native.pathtrace.contrastAmount", "1.41" },
+};
+
+static qboolean R_Settings_ProfileSaved( void )
+{
+	// OpenRemix keeps profiles in $REMIX_CONFIG_DIR, else openremix/ under the working directory
+	char pattern[MAX_PATH];
+	const char *dir = getenv( "REMIX_CONFIG_DIR" );
+	if( dir && *dir )
+		Q_snprintf( pattern, sizeof( pattern ), "%s/profiles/*.conf", dir );
+	else
+		Q_strncpy( pattern, "openremix/profiles/*.conf", sizeof( pattern ));
+#if defined( _WIN32 )
+	WIN32_FIND_DATAA found;
+	HANDLE handle = FindFirstFileA( pattern, &found );
+	if( handle == INVALID_HANDLE_VALUE )
+		return false;
+	FindClose( handle );
+	return true;
+#else
+	return false;
+#endif
+}
+
+static void R_Settings_ApplyXashDefaults( void )
+{
+	if( !g_remix.SetConfigVariable || R_Settings_ProfileSaved( ))
+		return;
+	for( size_t i = 0; i < ARRAYSIZE( s_xashDefaults ); i++ )
+	{
+		remixapi_ErrorCode err = g_remix.SetConfigVariable( s_xashDefaults[i].key, s_xashDefaults[i].value );
+		if( err != REMIXAPI_ERROR_CODE_SUCCESS )
+			gEngfuncs.Con_Reportf( S_WARN "ref_openremix: default %s = %s rejected: %s\n", s_xashDefaults[i].key,
+			                       s_xashDefaults[i].value, R_Remix_GetErrorString( err ));
+	}
+}
 
 static void R_Settings_Push( rt_setting_t *s )
 {
@@ -200,10 +250,10 @@ qboolean R_Init( void )
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.localRange", "0" );
 		// GoldSrc coordinates: Z-up (0: X, 1: Y, 2: Z)
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.volumetricUpAxis", "2" );
-		// Enable viewmodel ray-traced lighting
+		// Enable viewmodel ray-traced lighting (its scale is left to the profile)
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.viewModel", "1" );
-		g_remix.SetConfigVariable( "rtx.native.pathtrace.viewModelScale", "1.0" );
 	}
+	R_Settings_ApplyXashDefaults();
 
 	// Ensure mouse centering in windowed mode and raw input for full 360-degree rotation
 	if( gEngfuncs.Cvar_SetValue )
