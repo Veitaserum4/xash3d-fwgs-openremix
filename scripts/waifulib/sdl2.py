@@ -79,6 +79,9 @@ def sdl2_configure_path(conf, path, libname):
 				libpath = 'lib/x64'
 			else:
 				libpath = 'lib/' + conf.env.DEST_CPU
+			# development packages split lib/ by architecture, a CMake install does not
+			if not os.path.isdir(os.path.join(path, libpath)):
+				libpath = 'lib'
 		conf.env[LIBPATH] = [os.path.abspath(os.path.join(path, libpath))]
 		conf.env[LIB] = [libname]
 		conf.end_msg('yes: {0}, {1}, {2}'.format(conf.env[LIB], conf.env[LIBPATH], conf.env[INCLUDES]))

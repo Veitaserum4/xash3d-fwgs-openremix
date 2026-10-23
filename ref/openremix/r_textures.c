@@ -25,6 +25,13 @@ static cvar_t *rt_fx_emis      = NULL;
 static cvar_t *rt_glass_texture = NULL;
 static cvar_t *rt_chrome        = NULL;
 static cvar_t *rt_liquid_emis   = NULL;
+static cvar_t *rt_texture_nearest = NULL;
+
+// Game textures' sampling: linear, or nearest (rt_texture_nearest) for the original's crisp texels
+static int R_Textures_FilterMode( void )
+{
+	return rt_texture_nearest && rt_texture_nearest->value > 0.0f ? 0 : 1;
+}
 static cvar_t *rt_chrome_roughness = NULL;
 static cvar_t *rt_chrome_reflectance = NULL;
 static cvar_t *rt_water         = NULL;
@@ -416,6 +423,7 @@ void R_Textures_Init( void )
 		rt_glass_tint_r = gEngfuncs.Cvar_Get( "rt_glass_tint_r", "0.98", FCVAR_ARCHIVE, "Glass transmittance color Red" );
 		rt_glass_tint_g = gEngfuncs.Cvar_Get( "rt_glass_tint_g", "0.99", FCVAR_ARCHIVE, "Glass transmittance color Green" );
 		rt_glass_tint_b = gEngfuncs.Cvar_Get( "rt_glass_tint_b", "1.00", FCVAR_ARCHIVE, "Glass transmittance color Blue" );
+		rt_texture_nearest = gEngfuncs.Cvar_Get( "rt_texture_nearest", "0", FCVAR_ARCHIVE, "Nearest-neighbour texture filtering (crisp texels, as Half-Life without filtering); applies on map load" );
 		R_AutoPBR_Init();
 	}
 
@@ -686,7 +694,7 @@ static void R_Textures_CreateFx( remix_texture_t *entry, const char *name, uint3
 	matInfo.emissiveColorConstant.x = 1.0f;
 	matInfo.emissiveColorConstant.y = 1.0f;
 	matInfo.emissiveColorConstant.z = 1.0f;
-	matInfo.filterMode              = 1; // Linear
+	matInfo.filterMode              = R_Textures_FilterMode();
 	matInfo.wrapModeU               = 1;
 	matInfo.wrapModeV               = 1;
 
@@ -802,7 +810,7 @@ remixapi_MaterialHandle R_Textures_GetFxMaterialScaled( unsigned int texnum, flo
 	matInfo.emissiveColorConstant.x = 1.0f;
 	matInfo.emissiveColorConstant.y = 1.0f;
 	matInfo.emissiveColorConstant.z = 1.0f;
-	matInfo.filterMode              = 1; // Linear
+	matInfo.filterMode              = R_Textures_FilterMode();
 	matInfo.wrapModeU               = 1;
 	matInfo.wrapModeV               = 1;
 
@@ -869,7 +877,7 @@ remixapi_MaterialHandle R_Textures_GetEmissiveMaterial( unsigned int texnum )
 	matInfo.emissiveColorConstant.x = 1.0f;
 	matInfo.emissiveColorConstant.y = 1.0f;
 	matInfo.emissiveColorConstant.z = 1.0f;
-	matInfo.filterMode              = 1; // Linear
+	matInfo.filterMode              = R_Textures_FilterMode();
 	matInfo.wrapModeU               = 1;
 	matInfo.wrapModeV               = 1;
 
@@ -1331,7 +1339,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		matInfo.normalTexture = xrtNormal;
 	else if( hasAutoNormal )
 		matInfo.normalTexture = autoNormal;
-	matInfo.filterMode    = 1; // Linear
+	matInfo.filterMode    = R_Textures_FilterMode();
 	matInfo.wrapModeU     = 1; // Repeat
 	matInfo.wrapModeV     = 1; // Repeat
 

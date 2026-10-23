@@ -56,7 +56,7 @@ static const autopbr_category_t s_categories[] =
 
 void R_AutoPBR_Init( void )
 {
-	rt_autopbr         = gEngfuncs.Cvar_Get( "rt_autopbr", "1", FCVAR_ARCHIVE, "Infer PBR materials (metal, roughness, normal maps) for textures without XashRT or mod ones; applies on map load" );
+	rt_autopbr         = gEngfuncs.Cvar_Get( "rt_autopbr", "0", FCVAR_ARCHIVE, "Experimental: infer PBR materials (metal, roughness, normal maps) for textures without XashRT or mod ones; applies on map load" );
 	rt_autopbr_normals = gEngfuncs.Cvar_Get( "rt_autopbr_normals", "1", FCVAR_ARCHIVE, "Strength of normal maps generated from textures (0 = none); applies on map load" );
 }
 

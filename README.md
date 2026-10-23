@@ -77,8 +77,9 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_xrt` | 1 | Use XashRT content from `rt/` |
 | `rt_xrt_scene_lights` | 16 | Brightness of XashRT's extra map lights |
 | `rt_xrt_volumetric` | 4 | How much more XashRT's fog lights (`isVolumetric`) scatter in volumetrics, on map load |
-| `rt_autopbr` | 1 | Infer metal, roughness and normal maps for textures without XashRT or USD mod materials (`sound/materials.txt`, then texture names), on map load |
+| `rt_autopbr` | 0 | Experimental: infer metal, roughness and normal maps for textures without XashRT or USD mod materials (`sound/materials.txt`, then texture names), on map load |
 | `rt_autopbr_normals` | 1 | Strength of the normal maps auto PBR generates from textures (0 = none), on map load |
+| `rt_texture_nearest` | 0 | Nearest-neighbour texture filtering (crisp texels), on map load |
 | `rt_flsh`, `rt_flsh_cookie` | 8000, 1 | Flashlight brightness, and its light cookie (a texture projected along the beam; `rt/cookies/flashlight.png` replaces the built-in one) |
 | `rt_ies` | 1 | IES light profiles for the flashlight and map spotlights; `rt/ies/flashlight.ies` and `rt/ies/spotlight.ies` replace the built-in ones |
 | `rt_sun` | 50 | Strength of the map's sun (`light_environment`) |

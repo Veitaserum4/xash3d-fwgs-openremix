@@ -692,6 +692,9 @@ static void R_CollectRendererNames( void )
 	// ordering is important!
 	static const char *short_names[] =
 	{
+#if XASH_REF_OPENREMIX_ENABLED
+		"openremix",
+#endif
 #if XASH_REF_GL_ENABLED
 		"gl",
 #endif
@@ -715,6 +718,9 @@ static void R_CollectRendererNames( void )
 	// ordering is important here too!
 	static const char *long_names[ARRAYSIZE( short_names )] =
 	{
+#if XASH_REF_OPENREMIX_ENABLED
+		"OpenRemix (path tracing)",
+#endif
 #if XASH_REF_GL_ENABLED
 		"OpenGL",
 #endif
