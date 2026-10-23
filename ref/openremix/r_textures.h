@@ -30,6 +30,9 @@ typedef struct remix_texture_s
 	// Additive sprite variant: alpha = brightness, self-illuminated (beams, glows)
 	remixapi_TextureHandle  fxTexHandle;
 	remixapi_MaterialHandle fxMatHandle;
+	// A brighter copy of the additive variant (sparks, tracers), at fxBrightScale
+	remixapi_MaterialHandle fxBrightMatHandle;
+	float                   fxBrightScale;
 
 	// Self-illuminated material on the original texture (additive brushes), created on demand
 	remixapi_MaterialHandle emisMatHandle;
@@ -63,6 +66,7 @@ int                     R_Textures_Find( const char *name );
 const char             *R_Textures_GetName( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum );
+remixapi_MaterialHandle R_Textures_GetFxMaterialScaled( unsigned int texnum, float scale );
 remixapi_MaterialHandle R_Textures_GetEmissiveMaterial( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float brightness, qboolean repeat );
 qboolean                R_Textures_GetAverageColor( unsigned int texnum, float color[3] );

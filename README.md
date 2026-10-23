@@ -68,7 +68,10 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_water`, `rt_water_dist`, `rt_water_ior` | 1, 300, 1.333 | Ray-traced water, its clarity (units) and refraction |
 | `rt_water_fog` | 1 | Underwater fog density relative to Half-Life's (0 = clear) |
 | `rt_chrome`, `rt_chrome_reflectance`, `rt_chrome_roughness` | 1, 0.6, 0.3 | Model chrome without XashRT materials as real metal, its reflectance and roughness (`rt_chrome 0` = classic fake chrome) |
-| `rt_fx_emis` | 4 | Glow of beams, sprites and sparks |
+| `rt_fx_emis` | 4 | Glow of beams and sprites |
+| `rt_tracer_emis` | 6 | Glow of sparks and tracers, relative to `rt_fx_emis` |
+| `rt_liquid_emis` | 1 | Glow of glowing liquids such as toxic waste |
+| `rt_light_e` | 5000 | Light from entity lights (alien controller orbs, Nihilanth's spheres) |
 | `rt_emis` | 1 | Glow of light fixtures and screens |
 | `rt_xrt` | 1 | Use XashRT content from `rt/` |
 | `rt_xrt_scene_lights` | 16 | Brightness of XashRT's extra map lights |

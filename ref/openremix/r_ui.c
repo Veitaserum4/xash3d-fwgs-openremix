@@ -851,6 +851,16 @@ void R_UI_TriEnd( void )
 /*
  * R_UI_TriFlush - Submit accumulated 3D TriAPI geometry to OpenRemix
  */
+// Additive geometry's glow, relative to the FX material's (R_UI_TriFxBoost)
+static float s_triFxBoost = 1.0f;
+
+void R_UI_TriFxBoost( float scale )
+{
+	if( scale != s_triFxBoost )
+		R_UI_TriFlush();
+	s_triFxBoost = scale > 0.0f ? scale : 1.0f;
+}
+
 void R_UI_TriFlush( void )
 {
 	if( s_tri3D.batchIndexCount == 0 || s_tri3D.batchVertexCount == 0 )
@@ -877,7 +887,7 @@ void R_UI_TriFlush( void )
 	// self-illuminated material so it emits light; everything else stays a raster overlay
 	remixapi_MaterialHandle fxMat = NULL;
 	if( mode == kRenderTransAdd || mode == kRenderGlow )
-		fxMat = R_Textures_GetFxMaterial( batchTex );
+		fxMat = R_Textures_GetFxMaterialScaled( batchTex, s_triFxBoost );
 
 	remixapi_MaterialHandle mat = fxMat ? fxMat : R_GetSpriteMaterial( batchTex );
 

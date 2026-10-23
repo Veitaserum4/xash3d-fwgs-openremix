@@ -23,6 +23,7 @@ static cvar_t *rt_glass        = NULL;
 static cvar_t *rt_fx_emis      = NULL;
 static cvar_t *rt_glass_texture = NULL;
 static cvar_t *rt_chrome        = NULL;
+static cvar_t *rt_liquid_emis   = NULL;
 static cvar_t *rt_chrome_roughness = NULL;
 static cvar_t *rt_chrome_reflectance = NULL;
 static cvar_t *rt_water         = NULL;
@@ -401,6 +402,7 @@ void R_Textures_Init( void )
 		rt_water_ior    = gEngfuncs.Cvar_Get( "rt_water_ior", "1.333", FCVAR_ARCHIVE, "Water index of refraction" );
 		rt_glass_texture = gEngfuncs.Cvar_Get( "rt_glass_texture", "0.9", FCVAR_ARCHIVE, "Glass texture opacity: 0 = clear refractive glass, >0 = textured glass with reflections (applies on map load)" );
 		rt_water_fog    = gEngfuncs.Cvar_Get( "rt_water_fog", "1", FCVAR_ARCHIVE, "Underwater fog density, relative to Half-Life's (0 = clear water); applies on map load" );
+		rt_liquid_emis  = gEngfuncs.Cvar_Get( "rt_liquid_emis", "1", FCVAR_ARCHIVE, "Glow of glowing liquids such as toxic waste; applies on map load" );
 		rt_chrome       = gEngfuncs.Cvar_Get( "rt_chrome", "1", FCVAR_ARCHIVE, "Model chrome as path-traced metal (0 = Half-Life's fake environment map); applies on model load" );
 		rt_chrome_roughness = gEngfuncs.Cvar_Get( "rt_chrome_roughness", "0.3", FCVAR_ARCHIVE, "Roughness of path-traced model chrome; applies on model load" );
 		rt_chrome_reflectance = gEngfuncs.Cvar_Get( "rt_chrome_reflectance", "0.6", FCVAR_ARCHIVE, "Reflectance of path-traced model chrome (steel ~0.6, polished silver ~0.95); applies on model load" );
@@ -564,6 +566,9 @@ static void R_Textures_DestroyFx( remix_texture_t *entry )
 {
 	if( entry->fxMatHandle && g_remix.DestroyMaterial )
 		g_remix.DestroyMaterial( entry->fxMatHandle );
+	if( entry->fxBrightMatHandle && g_remix.DestroyMaterial )
+		g_remix.DestroyMaterial( entry->fxBrightMatHandle );
+	entry->fxBrightMatHandle = NULL;
 	if( entry->fxTexHandle && g_remix.DestroyTexture )
 		g_remix.DestroyTexture( entry->fxTexHandle );
 	if( entry->emisMatHandle && g_remix.DestroyMaterial )
@@ -739,6 +744,68 @@ qboolean R_Textures_GetAverageColor( unsigned int texnum, float color[3] )
 }
 
 /*
+ * R_Textures_GetFxMaterialScaled - The additive variant glowing `scale` times as bright (sparks and
+ * tracers outshine glows and beams), made on first use; the plain variant at scale 1
+ */
+remixapi_MaterialHandle R_Textures_GetFxMaterialScaled( unsigned int texnum, float scale )
+{
+	if( texnum == 0 || texnum >= MAX_REMIX_TEXTURES || !g_remixTextures[texnum].registered )
+		return NULL;
+	remix_texture_t *entry = &g_remixTextures[texnum];
+	if( scale == 1.0f || !entry->fxTexHandle || !g_remix.CreateMaterial )
+		return entry->fxMatHandle;
+	if( entry->fxBrightMatHandle && entry->fxBrightScale == scale )
+		return entry->fxBrightMatHandle;
+
+	if( entry->fxBrightMatHandle && g_remix.DestroyMaterial )
+		g_remix.DestroyMaterial( entry->fxBrightMatHandle );
+	entry->fxBrightMatHandle = NULL;
+
+	// The same texture as the plain variant (R_Textures_CreateFx)
+	const uint64_t fxHash = entry->texHash ^ 0xF00DFACE0BEA0000ULL;
+	wchar_t hashStr[32];
+	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)fxHash );
+
+	remixapi_MaterialInfoSelfIlluminationEXT selfExt;
+	memset( &selfExt, 0, sizeof( selfExt ) );
+	selfExt.sType     = REMIXAPI_STRUCT_TYPE_MATERIAL_SELF_ILLUMINATION_EXT;
+	selfExt.mask      = REMIXAPI_SELF_ILLUMINATION_MASK_NONE_EXT;
+	selfExt.maskScale = 1.0f;
+
+	remixapi_MaterialInfoOpaqueEXT opaqueExt;
+	memset( &opaqueExt, 0, sizeof( opaqueExt ) );
+	opaqueExt.sType                 = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
+	opaqueExt.pNext                 = &selfExt;
+	opaqueExt.albedoConstant.x      = 1.0f;
+	opaqueExt.albedoConstant.y      = 1.0f;
+	opaqueExt.albedoConstant.z      = 1.0f;
+	opaqueExt.opacityConstant       = 1.0f;
+	opaqueExt.useDrawCallAlphaState = 1;
+	opaqueExt.alphaTestType         = 7; // ALWAYS
+
+	const float base = rt_fx_emis && rt_fx_emis->value > 0.0f ? rt_fx_emis->value : 0.001f;
+
+	remixapi_MaterialInfo matInfo;
+	memset( &matInfo, 0, sizeof( matInfo ) );
+	matInfo.sType                   = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+	matInfo.pNext                   = &opaqueExt;
+	matInfo.hash                    = fxHash ^ 0x9E3779B97F4A7C15ULL ^ 0x0B51A4E5CA1ED000ULL;
+	matInfo.albedoTexture           = hashStr;
+	matInfo.emissiveIntensity       = base * scale;
+	matInfo.emissiveColorConstant.x = 1.0f;
+	matInfo.emissiveColorConstant.y = 1.0f;
+	matInfo.emissiveColorConstant.z = 1.0f;
+	matInfo.filterMode              = 1; // Linear
+	matInfo.wrapModeU               = 1;
+	matInfo.wrapModeV               = 1;
+
+	if( g_remix.CreateMaterial( &matInfo, &entry->fxBrightMatHandle ) != REMIXAPI_ERROR_CODE_SUCCESS )
+		entry->fxBrightMatHandle = NULL;
+	entry->fxBrightScale = scale;
+	return entry->fxBrightMatHandle ? entry->fxBrightMatHandle : entry->fxMatHandle;
+}
+
+/*
  * R_Textures_GetFxMaterial - Self-illuminated additive variant, or NULL if the texture has none
  */
 remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum )
@@ -907,7 +974,10 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	entry->height        = height;
 	entry->flags         = flags;
 	entry->isCutout      = ( baseName[0] == '{' );
-	entry->isWater       = ( baseName[0] == '!' || baseName[0] == '*' );
+	// Map textures ("...name.mip") only: the engine's built-in textures are named with a '*' too
+	// ("*particle", "*white"), and as water they lost their image
+	const size_t nameLength = Q_strlen( name );
+	entry->isWater       = ( baseName[0] == '!' || baseName[0] == '*' ) && nameLength > 4 && !Q_stricmp( name + nameLength - 4, ".mip" );
 	entry->isSky         = ( !Q_strnicmp( baseName, "sky", 3 ) || !Q_strnicmp( baseName, "scrollsky", 9 ) );
 	entry->isGlass       = R_Textures_IsGlass( baseName );
 
@@ -1237,8 +1307,15 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			matInfo.emissiveIntensity       = strength * emisMultiplier;
 			// XashRT's _e map, else the texture's brightest areas (lamp panels, screen content).
 			// GoldSrc's fullbright palette range is no guide: some lights are entirely
-			// fullbright (frame included), others have none
-			if( hasEmissiveMap )
+			// fullbright (frame included), others have none. Glowing liquids (toxic waste) are
+			// GoldSrc's fullbright turbulent surfaces: the whole texture, at about its own
+			// brightness rather than a lamp's
+			if( entry->isWater )
+			{
+				matInfo.emissiveIntensity = ( rt_liquid_emis ? Q_max( rt_liquid_emis->value, 0.0f ) : 1.0f ) * emisMultiplier;
+				matInfo.emissiveTexture   = albedoPath;
+			}
+			else if( hasEmissiveMap )
 				matInfo.emissiveTexture = xrtEmissive;
 			else if( R_Textures_CreateBrightMask( entry, rgbaData, width, height, strength * emisMultiplier, texHash ^ 0x4252494748544D4BULL, maskHashStr, ARRAYSIZE( maskHashStr ) ) )
 				matInfo.emissiveTexture = maskHashStr;

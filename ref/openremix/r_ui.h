@@ -87,6 +87,8 @@ int      R_UI_TriSpriteTexture( struct model_s *pSpriteModel, int frame );
 int      R_UI_TriWorldToScreen( const float *world, float *screen );
 void     R_UI_FillTriAPI( triangleapi_t *api );
 void     R_UI_TriFlush( void );
+// Glow of the additive geometry that follows, times the FX material's (1: as is); flushes on change
+void R_UI_TriFxBoost( float scale );
 
 #ifdef __cplusplus
 }

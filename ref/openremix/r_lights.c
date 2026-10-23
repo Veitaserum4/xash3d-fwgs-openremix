@@ -243,6 +243,7 @@ static cvar_t *rt_flsh_r           = NULL;
 static cvar_t *rt_flsh_u           = NULL;
 static cvar_t *rt_light_s          = NULL;
 static cvar_t *rt_light_d          = NULL;
+static cvar_t *rt_light_e          = NULL;
 static cvar_t *rt_light_radius     = NULL;
 static cvar_t *rt_light_range      = NULL;
 static cvar_t *rt_emis             = NULL;
@@ -303,6 +304,7 @@ void R_Lights_Init( void )
 		rt_flsh_u          = gEngfuncs.Cvar_Get( "rt_flsh_u", "-2.5", FCVAR_ARCHIVE, "Player flashlight up offset" );
 		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "1000", FCVAR_ARCHIVE, "Map static light intensity scale" );
 		rt_light_d         = gEngfuncs.Cvar_Get( "rt_light_d", "1000", FCVAR_ARCHIVE, "Dynamic lights (explosions/projectiles) intensity scale" );
+		rt_light_e         = gEngfuncs.Cvar_Get( "rt_light_e", "5000", FCVAR_ARCHIVE, "Entity lights (controller orbs, Nihilanth's spheres) intensity" );
 		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
 		rt_light_range     = gEngfuncs.Cvar_Get( "rt_light_range", "0", FCVAR_ARCHIVE, "Local light cutoff range (0 = unlimited physical falloff)" );
 		rt_emis            = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
@@ -813,13 +815,15 @@ static void R_Lights_SubmitFlashlight( void )
 R_Lights_SubmitPointDlight
 ====================
 */
-static void R_Lights_SubmitPointDlight( const dlight_t *l, int index, float d_scale )
+static void R_Lights_SubmitPointDlight( const dlight_t *l, int index, float d_scale, qboolean entityLight )
 {
 	if( !l || l->dark || l->radius <= 0.0f || index < 0 || index >= MAX_ACTIVE_DLIGHTS )
 		return;
 
-	// Scale intensity based on radius and color (GoldSrc dlights have radius ~ 80..300)
-	float falloff_mult = l->radius * 0.025f; // Quake to metric
+	// Scale intensity based on radius and color (GoldSrc dlights have radius ~ 80..300). An entity
+	// light's radius only says how far it tints its model (controller orbs send 16): its strength
+	// is rt_light_e's
+	float falloff_mult = entityLight ? 1.0f : l->radius * 0.025f; // Quake to metric
 	if( falloff_mult < 1.0f ) falloff_mult = 1.0f;
 
 	remixapi_LightInfoSphereEXT sphereExt;
@@ -901,7 +905,7 @@ void R_Lights_DrawFrame( void )
 				continue;
 			}
 
-			R_Lights_SubmitPointDlight( l, i, d_scale );
+			R_Lights_SubmitPointDlight( l, i, d_scale, false );
 		}
 	}
 
@@ -928,7 +932,7 @@ void R_Lights_DrawFrame( void )
 			dlight_t *l = &tr.elights[i];
 			if( l->die < curTime || l->radius <= 0.0f )
 				continue;
-			R_Lights_SubmitPointDlight( l, R_OPENREMIX_MAX_DLIGHTS + i, d_scale );
+			R_Lights_SubmitPointDlight( l, R_OPENREMIX_MAX_DLIGHTS + i, rt_light_e ? rt_light_e->value : 5000.0f, true );
 		}
 	}
 }

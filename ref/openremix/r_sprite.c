@@ -95,8 +95,12 @@ remixapi_MaterialHandle R_GetSpriteMaterial( int texnum )
 /*
  * R_Sprite_Init - Build cached unit quad mesh
  */
+static cvar_t *rt_tracer_emis = NULL;
+
 void R_Sprite_Init( void )
 {
+	rt_tracer_emis = gEngfuncs.Cvar_Get( "rt_tracer_emis", "6", FCVAR_ARCHIVE, "Glow of sparks and tracers, relative to other additive effects (rt_fx_emis)" );
+
 	if( !g_remix.CreateMesh )
 		return;
 
@@ -1272,6 +1276,8 @@ void CL_DrawTracers( double frametime, particle_t *tracers )
 	if( scale < 0.0f ) scale = 0.0f;
 
 	R_UI_TriRenderMode( kRenderTransAdd );
+	// Sparks and tracers are white-hot: brighter than glows and beams
+	R_UI_TriFxBoost( rt_tracer_emis ? rt_tracer_emis->value : 6.0f );
 
 	for( particle_t *p = tracers; p; p = p->next )
 	{
@@ -1336,4 +1342,5 @@ void CL_DrawTracers( double frametime, particle_t *tracers )
 	}
 
 	R_UI_TriFlush();
+	R_UI_TriFxBoost( 1.0f );
 }
