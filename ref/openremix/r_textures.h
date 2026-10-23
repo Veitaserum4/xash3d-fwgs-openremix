@@ -40,6 +40,9 @@ typedef struct remix_texture_s
 	// Emission mask generated from the texture's brightest areas
 	remixapi_TextureHandle  lumaTexHandle;
 
+	// Normal map generated from the texture (r_autopbr.c)
+	remixapi_TextureHandle  normalTexHandle;
+
 	qboolean                registered;
 	qboolean                isCutout;
 	qboolean                isWater;

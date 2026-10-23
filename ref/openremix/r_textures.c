@@ -7,6 +7,7 @@
 #include "r_remix.h"
 #include "r_textures.h"
 #include "r_xashrt.h"
+#include "r_autopbr.h"
 #include "r_ui.h"
 
 remix_texture_t g_remixTextures[MAX_REMIX_TEXTURES];
@@ -228,6 +229,7 @@ remixapi_MaterialHandle R_Textures_GetGlassMaterial( void )
 static void R_Textures_LoadMaterialsTxt( void )
 {
 	s_numGlassTextures = 0;
+	R_AutoPBR_ClearTypes();
 
 	// Populate built-in standard Half-Life glass textures first
 	static const char *s_builtinGlass[] = {
@@ -315,6 +317,7 @@ static void R_Textures_LoadMaterialsTxt( void )
 				texName[nameLen++] = *pos++;
 			}
 			texName[nameLen] = '\0';
+			R_AutoPBR_AddType( matType, texName );
 
 			if( ( matType == 'Y' || matType == 'y' ) && nameLen > 0 )
 			{
@@ -413,6 +416,7 @@ void R_Textures_Init( void )
 		rt_glass_tint_r = gEngfuncs.Cvar_Get( "rt_glass_tint_r", "0.98", FCVAR_ARCHIVE, "Glass transmittance color Red" );
 		rt_glass_tint_g = gEngfuncs.Cvar_Get( "rt_glass_tint_g", "0.99", FCVAR_ARCHIVE, "Glass transmittance color Green" );
 		rt_glass_tint_b = gEngfuncs.Cvar_Get( "rt_glass_tint_b", "1.00", FCVAR_ARCHIVE, "Glass transmittance color Blue" );
+		R_AutoPBR_Init();
 	}
 
 	R_Textures_LoadMaterialsTxt();
@@ -576,6 +580,9 @@ static void R_Textures_DestroyFx( remix_texture_t *entry )
 	if( entry->lumaTexHandle && g_remix.DestroyTexture )
 		g_remix.DestroyTexture( entry->lumaTexHandle );
 	entry->lumaTexHandle = NULL;
+	if( entry->normalTexHandle && g_remix.DestroyTexture )
+		g_remix.DestroyTexture( entry->normalTexHandle );
+	entry->normalTexHandle = NULL;
 	entry->fxMatHandle   = NULL;
 	entry->fxTexHandle   = NULL;
 	entry->emisMatHandle = NULL;
@@ -1162,14 +1169,40 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	qboolean hasOrm    = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_orm", xrtOrm, ARRAYSIZE( xrtOrm ) );
 	qboolean hasNormal = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_n", xrtNormal, ARRAYSIZE( xrtNormal ) );
 
+	// XashRT's replacement image for the texture
+	wchar_t xrtAlbedo[32];
+	const qboolean hasXrtAlbedo = R_XRT_GetReplacementTexture( name, "", xrtAlbedo, ARRAYSIZE( xrtAlbedo ) );
+
 	// Studio textures (#<model>/<texture>.mdl) carry the model's texture flags; others carry TF_*.
 	// Chrome is our fallback: XashRT's material for the texture, when it has one, comes first
 	const size_t nameLen = Q_strlen( name );
-	wchar_t xrtChromeAlbedo[32];
+	const qboolean studioTexture = nameLen > 4 && !Q_stricmp( name + nameLen - 4, ".mdl" );
 	const qboolean chrome = rt_chrome && rt_chrome->value > 0.0f && !clearGlass && !waterBody &&
-	                        FBitSet( flags, STUDIO_NF_CHROME ) && nameLen > 4 && !Q_stricmp( name + nameLen - 4, ".mdl" ) &&
-	                        !hasXrt && !hasOrm && !hasNormal &&
-	                        !R_XRT_GetReplacementTexture( name, "", xrtChromeAlbedo, ARRAYSIZE( xrtChromeAlbedo ) );
+	                        FBitSet( flags, STUDIO_NF_CHROME ) && studioTexture &&
+	                        !hasXrt && !hasOrm && !hasNormal && !hasXrtAlbedo;
+
+	// Auto PBR (r_autopbr.c) for map and model textures with nothing authored: XashRT's values
+	// and maps win channel by channel, and none of it touches a texture XashRT replaces (the
+	// generated maps would not fit its image). USD mods replace the whole material by its hash
+	float autoMetallic = 0.0f, autoRoughness = 0.85f;
+	qboolean autoBumps = false, autoMaterial = false;
+	wchar_t autoNormal[32];
+	qboolean hasAutoNormal = false;
+	const qboolean autoPbr = R_AutoPBR_Enabled() && ( studioTexture || ( nameLen > 4 && !Q_stricmp( name + nameLen - 4, ".mip" ))) &&
+	                         !clearGlass && !waterBody && !entry->isGlass && !entry->isSky && !entry->isWater && !chrome && !hasXrtAlbedo;
+	if( entry->normalTexHandle && g_remix.DestroyTexture )
+		g_remix.DestroyTexture( entry->normalTexHandle );
+	entry->normalTexHandle = NULL;
+	if( autoPbr )
+	{
+		autoMaterial = !hasOrm && R_AutoPBR_Classify( baseName, studioTexture, &autoMetallic, &autoRoughness, &autoBumps );
+		if( !autoMaterial )
+			autoBumps = true;
+		// Not over cutouts' see-through texels, whose colour is no surface
+		if( autoBumps && !hasNormal && !entry->isCutout )
+			hasAutoNormal = R_AutoPBR_CreateNormalMap( rgbaData, width, height, texHash ^ 0x4E4F524D414C4D50ULL, &entry->normalTexHandle,
+			                                           autoNormal, ARRAYSIZE( autoNormal ));
+	}
 	remixapi_MaterialPbrRemapEXT pbrRemap;
 	remixapi_MaterialNormalEncodingEXT normalEnc;
 	memset( &pbrRemap, 0, sizeof( pbrRemap ) );
@@ -1242,6 +1275,12 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			opaqueExt.roughnessConstant = 0.05f;
 		}
 
+		if( autoMaterial )
+		{
+			opaqueExt.metallicConstant  = autoMetallic;
+			opaqueExt.roughnessConstant = autoRoughness;
+		}
+
 		if( hasXrt && xrtMat.metallic >= 0.0f )
 			opaqueExt.metallicConstant = xrtMat.metallic;
 		if( hasXrt && xrtMat.roughness >= 0.0f )
@@ -1269,7 +1308,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			pbrRemap.pNext   = hasNormal ? (void *)&normalEnc : NULL;
 			opaqueExt.pNext  = &pbrRemap;
 		}
-		else if( hasNormal )
+		else if( hasNormal || hasAutoNormal )
 		{
 			opaqueExt.pNext = &normalEnc;
 		}
@@ -1277,8 +1316,8 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 
 	wchar_t maskHashStr[32];
 
-	wchar_t xrtAlbedo[32], xrtEmissive[32];
-	const wchar_t *albedoPath = R_XRT_GetReplacementTexture( name, "", xrtAlbedo, ARRAYSIZE( xrtAlbedo ) ) ? xrtAlbedo : hashStr;
+	wchar_t xrtEmissive[32];
+	const wchar_t *albedoPath = hasXrtAlbedo ? xrtAlbedo : hashStr;
 
 	remixapi_MaterialInfo matInfo;
 	memset( &matInfo, 0, sizeof( matInfo ) );
@@ -1290,6 +1329,8 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		matInfo.normalTexture = waterNormal;
 	else if( hasNormal )
 		matInfo.normalTexture = xrtNormal;
+	else if( hasAutoNormal )
+		matInfo.normalTexture = autoNormal;
 	matInfo.filterMode    = 1; // Linear
 	matInfo.wrapModeU     = 1; // Repeat
 	matInfo.wrapModeV     = 1; // Repeat
