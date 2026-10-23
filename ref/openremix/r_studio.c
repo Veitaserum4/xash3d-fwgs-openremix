@@ -786,12 +786,14 @@ static void R_StudioSetupChrome( const mstudiotexture_t *ptexture, const short *
 
 	if( !r_glowshellfreq )
 		r_glowshellfreq = gEngfuncs.Cvar_Get( "r_glowshellfreq", "2.2", 0, "glowing shell frequency update" );
+	// Chrome reflects from the viewer (SetChromeOrigin); only glow shells spin theirs over time
 	const float freq = r_glowshellfreq->value;
-	const vec3_t origin = {
-		cosf( freq * g_studio.time ) * 4000.0f,
-		sinf( freq * g_studio.time ) * 4000.0f,
-		cosf( freq * g_studio.time * 0.33f ) * 4000.0f
-	};
+	vec3_t origin;
+	if( FBitSet( g_nForceFaceFlags, STUDIO_NF_CHROME ))
+		VectorSet( origin, cosf( freq * g_studio.time ) * 4000.0f, sinf( freq * g_studio.time ) * 4000.0f,
+		           cosf( freq * g_studio.time * 0.33f ) * 4000.0f );
+	else
+		VectorCopy( RI.vieworg, origin );
 
 	int k = 0;
 	for( int j = 0; j < m_pSubModel->nummesh; j++ )
