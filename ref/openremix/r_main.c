@@ -60,6 +60,9 @@ static const struct { const char *key, *value; } s_xashDefaults[] =
 	{ "rtx.native.pathtrace.orca",           "1" },
 	{ "rtx.native.pathtrace.contrast",       "1" },
 	{ "rtx.native.pathtrace.contrastAmount", "1.41" },
+	{ "rtx.native.pathtrace.volumetrics",              "1" },
+	{ "rtx.native.pathtrace.volumetricHistory",        "6" },
+	{ "rtx.native.pathtrace.volumetricUpdateInterval", "4" },
 };
 
 static qboolean R_Settings_ProfileSaved( void )

@@ -20,6 +20,7 @@ static cvar_t *rt_xrt              = NULL;
 static cvar_t *rt_xrt_emis         = NULL;
 static cvar_t *rt_xrt_light_emis   = NULL;
 static cvar_t *rt_xrt_scene_lights = NULL;
+static cvar_t *rt_xrt_volumetric   = NULL;
 
 static inline uint64_t R_XRT_Hash64( const char *str )
 {
@@ -1009,7 +1010,10 @@ static void R_XRT_AddLight( const jval_t *light, const float m[16], uint64_t has
 	sphere.position.y              = m[13];
 	sphere.position.z              = m[14];
 	sphere.radius                  = 2.0f;
-	sphere.volumetricRadianceScale = 1.0f;
+	// XashRT marks the lights meant to light its fog (isVolumetric): RayTracedGL1 scatters only
+	// the brightest of them in full. Here every marked light scatters rt_xrt_volumetric times more
+	sphere.volumetricRadianceScale = J_Num( J_Get( J_Get( light, "extras" ), "isVolumetric" ), 0 ) != 0 && rt_xrt_volumetric
+	                                     ? Q_max( rt_xrt_volumetric->value, 0.0f ) : 1.0f;
 
 	if( !Q_strcmp( type, "spot" ) )
 	{
@@ -1217,6 +1221,7 @@ void R_XRT_Init( void )
 	rt_xrt_emis         = gEngfuncs.Cvar_Get( "rt_xrt_emis", "100", FCVAR_ARCHIVE, "Emission strength per XashRT emissiveMult" );
 	rt_xrt_light_emis   = gEngfuncs.Cvar_Get( "rt_xrt_light_glow", "0.05", FCVAR_ARCHIVE, "Extra emission per XashRT texture lightIntensity" );
 	rt_xrt_scene_lights = gEngfuncs.Cvar_Get( "rt_xrt_scene_lights", "16", FCVAR_ARCHIVE, "Brightness of XashRT hand-placed map lights (per watt)" );
+	rt_xrt_volumetric   = gEngfuncs.Cvar_Get( "rt_xrt_volumetric", "4", FCVAR_ARCHIVE, "How much more XashRT's fog lights (isVolumetric) scatter in volumetrics; applies on map load" );
 
 	if( !s_texEntries )
 		R_XRT_LoadTexturesJson();
