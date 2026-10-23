@@ -96,9 +96,11 @@ remixapi_MaterialHandle R_GetSpriteMaterial( int texnum )
  * R_Sprite_Init - Build cached unit quad mesh
  */
 static cvar_t *rt_tracer_emis = NULL;
+static cvar_t *rt_glow_sprites = NULL;
 
 void R_Sprite_Init( void )
 {
+	rt_glow_sprites = gEngfuncs.Cvar_Get( "rt_glow_sprites", "0", FCVAR_ARCHIVE, "Draw the glare sprites that fake bloom on lights (they grow with distance)" );
 	rt_tracer_emis = gEngfuncs.Cvar_Get( "rt_tracer_emis", "6", FCVAR_ARCHIVE, "Glow of sparks and tracers, relative to other additive effects (rt_fx_emis)" );
 
 	if( !g_remix.CreateMesh )
@@ -355,6 +357,12 @@ void R_DrawSpriteModel( cl_entity_t *e )
 		return;
 
 	if( !g_unitQuadMesh || !g_remix.DrawInstance )
+		return;
+
+	// Glare sprites (glow render mode, dissipating) fake bloom on lights: they grow with distance
+	// and fade when occluded. The path tracer's lights and bloom make them look out of place
+	if( e->curstate.rendermode == kRenderGlow && e->curstate.renderfx != kRenderFxNoDissipation &&
+	    !( rt_glow_sprites && rt_glow_sprites->value > 0.0f ))
 		return;
 
 	model_t *model = e->model;
