@@ -24,6 +24,7 @@ typedef struct bsp_submodel_mesh_s
 	model_t            *model;        // Engine submodel pointer
 	char                name[16];     // e.g. "*1", "*2"
 	remixapi_MeshHandle meshHandle;   // OpenRemix BLAS mesh handle
+	remixapi_MeshHandle sidesMeshHandle; // With the water's sides (EF_WATERSIDES), made on first use
 	uint64_t            hash;         // Unique 64-bit hash
 	qboolean            isGlass;      // True if submodel represents translucent glass
 } bsp_submodel_mesh_t;
@@ -63,7 +64,7 @@ qboolean    R_BSP_AddEntity( cl_entity_t *clent, int type );
 void        R_BSP_ClearEntities( void );
 
 // Submodel Query
-remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod );
+remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod, qboolean waterSides );
 
 #ifdef __cplusplus
 }
