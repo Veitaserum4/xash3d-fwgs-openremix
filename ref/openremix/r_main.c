@@ -40,7 +40,7 @@ static rt_setting_t s_settings[] =
 	{ "rt_framegen",  "0", "Frame generation" },
 	{ "rt_framegen_mult", "0", "Frame generation multiplier: 0 = 2x, 1 = 3x, 2 = 4x" },
 	{ "rt_dlss_quality",  "2", "DLSS quality: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance" },
-	{ "rt_caustics",      "1", "Fake water caustics: light through water draws a moving web on what it lights" },
+	{ "rt_caustics",      "1", "Caustics: light through water and bumpy glass is focused by their normal maps" },
 };
 
 // Fog cvars are owned by r_lights.c; changes re-apply the volumetric configuration

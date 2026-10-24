@@ -1119,7 +1119,6 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	remixapi_MaterialInfoTranslucentEXT waterExt;
 	remixapi_MaterialNormalEncodingEXT waterNormalEnc;
 	remixapi_MaterialNormalScrollEXT waterScroll;
-	remixapi_MaterialInfoCausticsEXT waterCaustics;
 	wchar_t waterNormal[32];
 	qboolean hasWaterNormal = false;
 
@@ -1186,19 +1185,14 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 			waterNormalEnc.encoding = 5; // Source water: scrolled tangent-space map
 			waterExt.pNext = &waterNormalEnc;
 		}
-
-		// Light through the water draws fake caustics on what it lights (rt_caustics)
-		memset( &waterCaustics, 0, sizeof( waterCaustics ) );
-		waterCaustics.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_CAUSTICS_EXT;
-		waterCaustics.pNext = waterExt.pNext;
-		waterExt.pNext      = &waterCaustics;
 	}
 
 	// XashRT PBR maps: _orm packs roughness in green and metallic in blue (RayTracedGL1's
 	// NULL_ROUGHNESS_METALLIC swizzle); _n is a tangent-space (OpenGL convention) normal map
 	wchar_t xrtOrm[32], xrtNormal[32];
 	qboolean hasOrm    = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_orm", xrtOrm, ARRAYSIZE( xrtOrm ) );
-	qboolean hasNormal = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_n", xrtNormal, ARRAYSIZE( xrtNormal ) );
+	// Clear glass takes XashRT's normal map too: its bumps focus light into caustics
+	qboolean hasNormal = !waterBody && R_XRT_GetReplacementTexture( name, "_n", xrtNormal, ARRAYSIZE( xrtNormal ) );
 
 	// XashRT's replacement image for the texture
 	wchar_t xrtAlbedo[32];
@@ -1252,7 +1246,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	{
 		memset( &transExt, 0, sizeof( transExt ) );
 		transExt.sType                   = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT;
-		transExt.pNext                   = NULL;
+		transExt.pNext                   = hasNormal ? (void *)&normalEnc : NULL;
 		// For pure ray-traced refractive glass, transmittanceTexture must be NULL so Beer-Lambert
 		// does not absorb all background light based on dark legacy diffuse pixel colors.
 		transExt.transmittanceTexture    = NULL;
