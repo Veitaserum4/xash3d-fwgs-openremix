@@ -1020,9 +1020,13 @@ static void R_XRT_AddLight( const jval_t *light, const float m[16], uint64_t has
 	sphere.position.z              = m[14];
 	sphere.radius                  = 2.0f;
 	// XashRT marks the lights meant to light its fog (isVolumetric): RayTracedGL1 scatters only
-	// the brightest of them in full. Here every marked light scatters rt_xrt_volumetric times more
-	sphere.volumetricRadianceScale = J_Num( J_Get( J_Get( light, "extras" ), "isVolumetric" ), 0 ) != 0 && rt_xrt_volumetric
-	                                     ? Q_max( rt_xrt_volumetric->value, 0.0f ) : 1.0f;
+	// the brightest of them in full. Here every marked light scatters rt_xrt_volumetric times more,
+	// the others rt_light_volumetric times
+	cvar_t *plainScale = gEngfuncs.pfnGetCvarPointer( "rt_light_volumetric" );
+	if( J_Num( J_Get( J_Get( light, "extras" ), "isVolumetric" ), 0 ) != 0 && rt_xrt_volumetric )
+		sphere.volumetricRadianceScale = Q_max( rt_xrt_volumetric->value, 0.0f );
+	else
+		sphere.volumetricRadianceScale = plainScale ? Q_max( plainScale->value, 0.0f ) : 1.0f;
 
 	if( !Q_strcmp( type, "spot" ) )
 	{
