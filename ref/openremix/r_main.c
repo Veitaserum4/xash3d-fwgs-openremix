@@ -64,6 +64,7 @@ static const struct { const char *key, *value; } s_xashDefaults[] =
 	{ "rtx.native.pathtrace.volumetrics",              "1" },
 	{ "rtx.native.pathtrace.volumetricHistory",        "6" },
 	{ "rtx.native.pathtrace.volumetricUpdateInterval", "4" },
+	{ "rtx.native.pathtrace.volumetricScattering",     "0.05" }, // the lights' scales (rt_sun_volumetric...) are set against it
 	{ "rtx.native.pathtrace.volumetricUpAxis",         "2" }, // Z-up
 	{ "rtx.native.pathtrace.volumetricMaxDistance",    "250" },
 };

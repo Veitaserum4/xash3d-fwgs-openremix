@@ -1234,7 +1234,7 @@ void R_XRT_Init( void )
 	rt_xrt_emis         = gEngfuncs.Cvar_Get( "rt_xrt_emis", "100", FCVAR_ARCHIVE, "Emission strength per XashRT emissiveMult" );
 	rt_xrt_light_emis   = gEngfuncs.Cvar_Get( "rt_xrt_light_glow", "0.05", FCVAR_ARCHIVE, "Extra emission per XashRT texture lightIntensity" );
 	rt_xrt_scene_lights = gEngfuncs.Cvar_Get( "rt_xrt_scene_lights", "8", FCVAR_ARCHIVE, "Brightness of XashRT hand-placed map lights (per watt)" );
-	rt_xrt_volumetric   = gEngfuncs.Cvar_Get( "rt_xrt_volumetric", "4", FCVAR_ARCHIVE, "How much more XashRT's fog lights (isVolumetric) scatter in volumetrics; applies on map load" );
+	rt_xrt_volumetric   = gEngfuncs.Cvar_Get( "rt_xrt_volumetric", "80", FCVAR_ARCHIVE, "How much more XashRT's fog lights (isVolumetric) scatter in volumetrics; applies on map load" );
 
 	if( !s_texEntries )
 		R_XRT_LoadTexturesJson();
