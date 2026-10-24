@@ -76,7 +76,7 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_emis` | 1 | Glow of light fixtures and screens |
 | `rt_xrt` | 1 | Use XashRT content from `rt/` |
 | `rt_xrt_scene_lights` | 8 | Brightness of XashRT's extra map lights |
-| `rt_light_volumetric` | 0.25 | How much the map's own lights scatter in volumetric fog (the lights XashRT marks as volumetric use `rt_xrt_volumetric`), on map load |
+| `rt_light_volumetric` | 0.02 | How much the map's own lights scatter in volumetric fog (the lights XashRT marks as volumetric use `rt_xrt_volumetric`), on map load |
 | `rt_sun_volumetric` | 80 | How much more the sun scatters in volumetric fog (light shafts), on map load |
 | `rt_xrt_volumetric` | 80 | How much more XashRT's fog lights (`isVolumetric`) scatter in volumetrics, on map load |
 | `rt_autopbr` | 0 | Experimental: infer metal, roughness and normal maps for textures without XashRT or USD mod materials (`sound/materials.txt`, then texture names) |

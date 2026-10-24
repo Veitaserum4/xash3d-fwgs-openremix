@@ -298,7 +298,7 @@ void R_Lights_Init( void )
 		rt_flsh_cookie     = gEngfuncs.Cvar_Get( "rt_flsh_cookie", "1", FCVAR_ARCHIVE, "Project a texture along the flashlight's beam (rt/cookies/flashlight.png replaces the built-in one)" );
 		rt_ies             = gEngfuncs.Cvar_Get( "rt_ies", "1", FCVAR_ARCHIVE, "IES light profiles for the flashlight and spotlights (rt/ies/*.ies replace the built-in ones)" );
 		rt_sun             = gEngfuncs.Cvar_Get( "rt_sun", "50", FCVAR_ARCHIVE, "Sun irradiance for a white light_environment at brightness 255" );
-		rt_light_volumetric = gEngfuncs.Cvar_Get( "rt_light_volumetric", "0.25", FCVAR_ARCHIVE, "How much the map's lights scatter in volumetric fog, but for the ones XashRT marks as volumetric (rt_xrt_volumetric); applies on map load" );
+		rt_light_volumetric = gEngfuncs.Cvar_Get( "rt_light_volumetric", "0.02", FCVAR_ARCHIVE, "How much the map's lights scatter in volumetric fog, but for the ones XashRT marks as volumetric (rt_xrt_volumetric); applies on map load" );
 		rt_sun_volumetric  = gEngfuncs.Cvar_Get( "rt_sun_volumetric", "80", FCVAR_ARCHIVE, "How much more the sun scatters in volumetric fog (light shafts); applies on map load" );
 		rt_sun_diameter    = gEngfuncs.Cvar_Get( "rt_sun_diameter", "0.53", FCVAR_ARCHIVE, "Sun angular diameter in degrees" );
 		rt_flsh            = gEngfuncs.Cvar_Get( "rt_flsh", "8000", FCVAR_ARCHIVE, "Player flashlight intensity" );
