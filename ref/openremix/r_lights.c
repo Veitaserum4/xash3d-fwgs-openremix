@@ -325,8 +325,9 @@ void R_Lights_Init( void )
 		_rt_dlss_available = gEngfuncs.Cvar_Get( "_rt_dlss_available", "1", 0, "DLSS availability flag" );
 	}
 
-	// Nothing is pushed to OpenRemix here: its profile (the overlay's, or Xash3D's defaults when none is
-	// saved) decides, and fog and light range settings only apply when changed (R_Settings_Sync)
+	// Nothing is pushed to OpenRemix's settings here: its profile (the overlay's, or Xash3D's defaults when
+	// none is saved) decides, and fog and light range settings only apply when changed (R_Settings_Sync)
+	R_Lights_ApplyFogState();
 	gEngfuncs.Con_Printf( "^2ref_openremix: Light and volumetric subsystem initialized^7\n" );
 }
 
@@ -384,11 +385,43 @@ void R_Lights_Shutdown( void )
 
 /*
 ====================
+R_Lights_ApplyFogState
+
+Half-Life sets no fog the path tracer could scatter in, so volumetrics (light shafts) would
+stay off with the override off. XashRT keeps a thin medium of its own: so does this, handed to
+OpenRemix as the game's fog (remixapi_SetFogState) so that the profile's override stays the
+user's. rt_fog_distance: the sight distance in meters (5% of the light left), as in the override
+====================
+*/
+void R_Lights_ApplyFogState( void )
+{
+	if( !g_remix.SetFogState )
+		return;
+
+	remixapi_FogInfo fog;
+	memset( &fog, 0, sizeof( fog ) );
+	fog.sType = REMIXAPI_STRUCT_TYPE_FOG_INFO;
+	if( rt_fog && rt_fog->value > 0.0f )
+	{
+		const float meters = ( rt_fog_distance && rt_fog_distance->value > 1.0f ) ? rt_fog_distance->value : 2000.0f;
+		fog.mode    = 1; // exp: the density is the extinction per world unit
+		fog.color.x = fog.color.y = fog.color.z = 1.0f;
+		fog.density = 3.0f / ( meters / 0.0254f ); // -ln( 0.05 ) = 3
+	}
+	g_remix.SetFogState( &fog );
+}
+
+/*
+====================
 R_Lights_UpdateVolumetrics
+
+Applies changed fog and light range settings (R_Settings_Sync): the profile keeps the rest
 ====================
 */
 void R_Lights_UpdateVolumetrics( void )
 {
+	R_Lights_ApplyFogState();
+
 	if( !g_remix.SetConfigVariable )
 		return;
 
@@ -406,13 +439,6 @@ void R_Lights_UpdateVolumetrics( void )
 	if( rt_fog && rt_fog->value > 0 )
 	{
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.volumetrics", "1" );
-
-		if( rt_fog_distance )
-		{
-			char distBuf[32];
-			Q_snprintf( distBuf, sizeof( distBuf ), "%.1f", rt_fog_distance->value );
-			g_remix.SetConfigVariable( "rtx.native.pathtrace.volumetricDistance", distBuf );
-		}
 
 		if( rt_fog_scattering )
 		{
@@ -720,6 +746,7 @@ void R_Lights_NewMap( const char *entities )
 		}
 	}
 
+	R_Lights_ApplyFogState();
 	gEngfuncs.Con_Printf( "^2ref_openremix: Extracted %u static map lights (Sun: %s)^7\n",
 		g_lights.static_lights_count, g_lights.has_sun ? "Yes" : "No" );
 }

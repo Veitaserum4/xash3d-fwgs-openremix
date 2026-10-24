@@ -60,6 +60,7 @@ void R_Lights_Shutdown( void );
 void R_Lights_NewMap( const char *entities );
 void R_Lights_DrawFrame( void );
 void R_Lights_UpdateVolumetrics( void );
+void R_Lights_ApplyFogState( void );
 
 #ifdef __cplusplus
 }
