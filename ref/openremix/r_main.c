@@ -519,6 +519,10 @@ void R_SetupCamera( const ref_viewpass_t *rvp )
 		cl_entity_t *waterEnt = gEngfuncs.CL_GetWaterEntity ? gEngfuncs.CL_GetWaterEntity( rvp->vieworigin ) : NULL;
 		if( waterEnt && waterEnt->model && waterEnt->model->type == mod_brush && waterEnt->curstate.skin < 0 )
 			contents = waterEnt->curstate.skin;
+		// Decorative water (not water contents) is still drawn as a water body
+		if( contents != CONTENTS_WATER && contents != CONTENTS_SLIME && contents != CONTENTS_LAVA &&
+		    R_BSP_PointInWaterEntity( rvp->vieworigin ))
+			contents = CONTENTS_WATER;
 		float color[3], distance;
 		if( ( contents == CONTENTS_WATER || contents == CONTENTS_SLIME || contents == CONTENTS_LAVA ) &&
 		    R_Textures_GetWaterMedium( color, &distance ) )

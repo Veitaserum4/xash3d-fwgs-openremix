@@ -968,6 +968,33 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	}
 }
 
+/*
+ * R_BSP_PointInWaterEntity - Inside a drawn water brush entity's bounds (unrotated): its contents
+ * need not be water (decorative water, such as func_water with skin -7), but it is drawn as a
+ * water body, so a camera inside sees it from below as one
+ */
+qboolean R_BSP_PointInWaterEntity( const vec3_t p )
+{
+	cl_entity_t **lists[2] = { g_bspState.solid_entities, g_bspState.trans_entities };
+	const uint32_t counts[2] = { g_bspState.num_solid_entities, g_bspState.num_trans_entities };
+	for( int l = 0; l < 2; l++ )
+	{
+		for( uint32_t i = 0; i < counts[l]; i++ )
+		{
+			const cl_entity_t *e = lists[l][i];
+			if( !e || !e->model || e->model->type != mod_brush || e->model == tr.worldmodel )
+				continue;
+			vec3_t mins, maxs;
+			VectorAdd( e->origin, e->model->mins, mins );
+			VectorAdd( e->origin, e->model->maxs, maxs );
+			if( p[0] > mins[0] && p[0] < maxs[0] && p[1] > mins[1] && p[1] < maxs[1] && p[2] > mins[2] && p[2] < maxs[2] &&
+			    R_BSP_IsSubmodelWater( e->model ))
+				return true;
+		}
+	}
+	return false;
+}
+
 void R_BSP_DrawEntities( void )
 {
 	// Draw solid brush entities

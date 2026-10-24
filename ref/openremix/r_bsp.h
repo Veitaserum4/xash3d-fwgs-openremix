@@ -58,6 +58,8 @@ void        R_BSP_Teardown( void );
 void        R_BSP_DrawWorld( void );
 void        R_BSP_DrawBrushEntity( cl_entity_t *ent );
 void        R_BSP_DrawEntities( void );
+// The point is inside a drawn water brush entity (func_water), below its surface
+qboolean    R_BSP_PointInWaterEntity( const vec3_t p );
 
 // Entity List Collection (invoked by R_AddEntity)
 qboolean    R_BSP_AddEntity( cl_entity_t *clent, int type );
