@@ -514,8 +514,13 @@ void R_SetupCamera( const ref_viewpass_t *rvp )
 	if( rvp && tr.worldmodel && tr.worldmodel->nodes && gEngfuncs.Mod_PointInLeaf )
 	{
 		mleaf_t *leaf = gEngfuncs.Mod_PointInLeaf( rvp->vieworigin, tr.worldmodel->nodes, tr.worldmodel );
+		int contents = leaf ? leaf->contents : CONTENTS_EMPTY;
+		// Water brush entities (func_water) hold their contents in skin, as ref_gl's fog reads them
+		cl_entity_t *waterEnt = gEngfuncs.CL_GetWaterEntity ? gEngfuncs.CL_GetWaterEntity( rvp->vieworigin ) : NULL;
+		if( waterEnt && waterEnt->model && waterEnt->model->type == mod_brush && waterEnt->curstate.skin < 0 )
+			contents = waterEnt->curstate.skin;
 		float color[3], distance;
-		if( leaf && ( leaf->contents == CONTENTS_WATER || leaf->contents == CONTENTS_SLIME || leaf->contents == CONTENTS_LAVA ) &&
+		if( ( contents == CONTENTS_WATER || contents == CONTENTS_SLIME || contents == CONTENTS_LAVA ) &&
 		    R_Textures_GetWaterMedium( color, &distance ) )
 		{
 			medium.inside = 1;
