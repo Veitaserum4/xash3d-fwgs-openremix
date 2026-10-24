@@ -302,7 +302,7 @@ void R_Lights_Init( void )
 		rt_flsh_angle      = gEngfuncs.Cvar_Get( "rt_flsh_angle", "25", FCVAR_ARCHIVE, "Player flashlight outer cone angle in degrees" );
 		rt_flsh_r          = gEngfuncs.Cvar_Get( "rt_flsh_r", "2.5", FCVAR_ARCHIVE, "Player flashlight right offset" );
 		rt_flsh_u          = gEngfuncs.Cvar_Get( "rt_flsh_u", "-2.5", FCVAR_ARCHIVE, "Player flashlight up offset" );
-		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "1000", FCVAR_ARCHIVE, "Map static light intensity scale" );
+		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "500", FCVAR_ARCHIVE, "Map static light intensity scale" );
 		rt_light_d         = gEngfuncs.Cvar_Get( "rt_light_d", "1000", FCVAR_ARCHIVE, "Dynamic lights (explosions/projectiles) intensity scale" );
 		rt_light_e         = gEngfuncs.Cvar_Get( "rt_light_e", "5000", FCVAR_ARCHIVE, "Entity lights (controller orbs, Nihilanth's spheres) intensity" );
 		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
@@ -479,8 +479,8 @@ void R_Lights_NewMap( const char *entities )
 	char key[128];
 	char value[256];
 
-	float s_scale = ( rt_light_s ? rt_light_s->value : 1000.0f );
-	if( s_scale <= 0.0f ) s_scale = 1000.0f;
+	float s_scale = ( rt_light_s ? rt_light_s->value : 500.0f );
+	if( s_scale <= 0.0f ) s_scale = 500.0f;
 
 	for( ;; )
 	{

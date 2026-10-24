@@ -75,7 +75,7 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_light_e` | 5000 | Light from entity lights (alien controller orbs, Nihilanth's spheres) |
 | `rt_emis` | 1 | Glow of light fixtures and screens |
 | `rt_xrt` | 1 | Use XashRT content from `rt/` |
-| `rt_xrt_scene_lights` | 16 | Brightness of XashRT's extra map lights |
+| `rt_xrt_scene_lights` | 8 | Brightness of XashRT's extra map lights |
 | `rt_xrt_volumetric` | 4 | How much more XashRT's fog lights (`isVolumetric`) scatter in volumetrics, on map load |
 | `rt_autopbr` | 0 | Experimental: infer metal, roughness and normal maps for textures without XashRT or USD mod materials (`sound/materials.txt`, then texture names) |
 | `rt_autopbr_normals` | 1 | Strength of the normal maps auto PBR generates from textures (0 = none) |

@@ -1010,7 +1010,7 @@ static void R_XRT_AddLight( const jval_t *light, const float m[16], uint64_t has
 	const jval_t *color = J_Get( light, "color" );
 	// Blender exports W * 683 / (4 pi) candela; back to watts, then into map-light radiance units
 	float watts = (float)J_Num( J_Get( light, "intensity" ), 1.0 ) / 54.35f;
-	float scale = watts * ( rt_xrt_scene_lights ? rt_xrt_scene_lights->value : 16.0f );
+	float scale = watts * ( rt_xrt_scene_lights ? rt_xrt_scene_lights->value : 8.0f );
 
 	remixapi_LightInfoSphereEXT sphere;
 	memset( &sphere, 0, sizeof( sphere ) );
@@ -1229,7 +1229,7 @@ void R_XRT_Init( void )
 	rt_xrt              = gEngfuncs.Cvar_Get( "rt_xrt", "1", FCVAR_ARCHIVE, "Use XashRT content from the rt/ folder (materials, textures, map additions); applies on map load" );
 	rt_xrt_emis         = gEngfuncs.Cvar_Get( "rt_xrt_emis", "100", FCVAR_ARCHIVE, "Emission strength per XashRT emissiveMult" );
 	rt_xrt_light_emis   = gEngfuncs.Cvar_Get( "rt_xrt_light_glow", "0.05", FCVAR_ARCHIVE, "Extra emission per XashRT texture lightIntensity" );
-	rt_xrt_scene_lights = gEngfuncs.Cvar_Get( "rt_xrt_scene_lights", "16", FCVAR_ARCHIVE, "Brightness of XashRT hand-placed map lights (per watt)" );
+	rt_xrt_scene_lights = gEngfuncs.Cvar_Get( "rt_xrt_scene_lights", "8", FCVAR_ARCHIVE, "Brightness of XashRT hand-placed map lights (per watt)" );
 	rt_xrt_volumetric   = gEngfuncs.Cvar_Get( "rt_xrt_volumetric", "4", FCVAR_ARCHIVE, "How much more XashRT's fog lights (isVolumetric) scatter in volumetrics; applies on map load" );
 
 	if( !s_texEntries )
