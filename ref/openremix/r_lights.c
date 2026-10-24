@@ -12,6 +12,7 @@ lights_state_t g_lights;
 
 // Lighting CVars
 static cvar_t *rt_sun              = NULL;
+static cvar_t *rt_sun_volumetric   = NULL;
 static cvar_t *rt_ies              = NULL;
 
 /*
@@ -296,6 +297,7 @@ void R_Lights_Init( void )
 		rt_flsh_cookie     = gEngfuncs.Cvar_Get( "rt_flsh_cookie", "1", FCVAR_ARCHIVE, "Project a texture along the flashlight's beam (rt/cookies/flashlight.png replaces the built-in one)" );
 		rt_ies             = gEngfuncs.Cvar_Get( "rt_ies", "1", FCVAR_ARCHIVE, "IES light profiles for the flashlight and spotlights (rt/ies/*.ies replace the built-in ones)" );
 		rt_sun             = gEngfuncs.Cvar_Get( "rt_sun", "50", FCVAR_ARCHIVE, "Sun irradiance for a white light_environment at brightness 255" );
+		rt_sun_volumetric  = gEngfuncs.Cvar_Get( "rt_sun_volumetric", "4", FCVAR_ARCHIVE, "How much more the sun scatters in volumetric fog (light shafts); applies on map load" );
 		rt_sun_diameter    = gEngfuncs.Cvar_Get( "rt_sun_diameter", "0.53", FCVAR_ARCHIVE, "Sun angular diameter in degrees" );
 		rt_flsh            = gEngfuncs.Cvar_Get( "rt_flsh", "8000", FCVAR_ARCHIVE, "Player flashlight intensity" );
 		rt_flsh_radius     = gEngfuncs.Cvar_Get( "rt_flsh_radius", "2.0", FCVAR_ARCHIVE, "Player flashlight source radius" );
@@ -308,9 +310,9 @@ void R_Lights_Init( void )
 		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
 		rt_light_range     = gEngfuncs.Cvar_Get( "rt_light_range", "0", FCVAR_ARCHIVE, "Local light cutoff range (0 = unlimited physical falloff)" );
 		rt_emis            = gEngfuncs.Cvar_Get( "rt_emis", "1.0", FCVAR_ARCHIVE, "Texture light emission multiplier" );
-		rt_fog             = gEngfuncs.Cvar_Get( "rt_fog", "0", FCVAR_ARCHIVE, "Enable OpenRemix path-traced volumetric fog" );
-		rt_fog_distance    = gEngfuncs.Cvar_Get( "rt_fog_distance", "500.0", FCVAR_ARCHIVE, "Volumetric fog sight distance in meters" );
-		rt_fog_scattering  = gEngfuncs.Cvar_Get( "rt_fog_scattering", "0.3", FCVAR_ARCHIVE, "Volumetric fog light scattering multiplier" );
+		rt_fog             = gEngfuncs.Cvar_Get( "rt_fog", "1", FCVAR_ARCHIVE, "Enable OpenRemix path-traced volumetric fog" );
+		rt_fog_distance    = gEngfuncs.Cvar_Get( "rt_fog_distance", "2000.0", FCVAR_ARCHIVE, "Volumetric fog sight distance in meters" );
+		rt_fog_scattering  = gEngfuncs.Cvar_Get( "rt_fog_scattering", "1.0", FCVAR_ARCHIVE, "Volumetric fog light scattering multiplier" );
 
 		// Register client compatibility variables so game client does not warn each frame
 		_rt_labcoat        = gEngfuncs.Cvar_Get( "_rt_labcoat", "0", 0, "Internal labcoat player model state" );
@@ -323,7 +325,8 @@ void R_Lights_Init( void )
 		_rt_dlss_available = gEngfuncs.Cvar_Get( "_rt_dlss_available", "1", 0, "DLSS availability flag" );
 	}
 
-	R_Lights_UpdateVolumetrics();
+	// Nothing is pushed to OpenRemix here: its profile (the overlay's, or Xash3D's defaults when none is
+	// saved) decides, and fog and light range settings only apply when changed (R_Settings_Sync)
 	gEngfuncs.Con_Printf( "^2ref_openremix: Light and volumetric subsystem initialized^7\n" );
 }
 
@@ -403,9 +406,6 @@ void R_Lights_UpdateVolumetrics( void )
 	if( rt_fog && rt_fog->value > 0 )
 	{
 		g_remix.SetConfigVariable( "rtx.native.pathtrace.volumetrics", "1" );
-		g_remix.SetConfigVariable( "rtx.native.pathtrace.volumetricOverride", "1" );
-		g_remix.SetConfigVariable( "rtx.native.pathtrace.volumetricUpAxis", "2" ); // Z-up
-		g_remix.SetConfigVariable( "rtx.native.pathtrace.volumetricMaxDistance", "250.0" );
 
 		if( rt_fog_distance )
 		{
@@ -616,7 +616,7 @@ void R_Lights_NewMap( const char *entities )
 					distantExt.direction.y             = g_lights.sun_direction[1];
 					distantExt.direction.z             = g_lights.sun_direction[2];
 					distantExt.angularDiameterDegrees  = g_lights.sun_diameter;
-					distantExt.volumetricRadianceScale = 1.0f;
+					distantExt.volumetricRadianceScale = rt_sun_volumetric ? Q_max( rt_sun_volumetric->value, 0.0f ) : 1.0f;
 
 					remixapi_LightInfo sunInfo;
 					memset( &sunInfo, 0, sizeof( sunInfo ) );
@@ -720,7 +720,6 @@ void R_Lights_NewMap( const char *entities )
 		}
 	}
 
-	R_Lights_UpdateVolumetrics();
 	gEngfuncs.Con_Printf( "^2ref_openremix: Extracted %u static map lights (Sun: %s)^7\n",
 		g_lights.static_lights_count, g_lights.has_sun ? "Yes" : "No" );
 }

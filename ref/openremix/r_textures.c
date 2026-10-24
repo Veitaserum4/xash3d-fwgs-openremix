@@ -844,6 +844,20 @@ remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum )
 	return NULL;
 }
 
+qboolean R_Textures_IsFakeLightShaft( unsigned int texnum )
+{
+	if( texnum == 0 || texnum >= MAX_REMIX_TEXTURES || !g_remixTextures[texnum].registered )
+		return false;
+
+	cvar_t *fog = gEngfuncs.pfnGetCvarPointer( "rt_fog" );
+	if( !fog || fog->value <= 0.0f )
+		return false;
+
+	// XashRT's emissiveMult 0.01 (x rt_xrt_emis = 1): lamps are 0.1 and up
+	xrt_material_t xrtMat;
+	return R_XRT_GetMaterial( g_remixTextures[texnum].name, &xrtMat ) && xrtMat.emissive >= 0.0f && xrtMat.emissive < 2.0f;
+}
+
 /*
  * R_Textures_GetEmissiveMaterial - Self-illuminated material sampling the texture as uploaded.
  * Used for additive brush entities: coverage comes from the draw's texture factor (renderamt)

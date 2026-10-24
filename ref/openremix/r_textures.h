@@ -78,6 +78,9 @@ remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetFxMaterial( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_GetFxMaterialScaled( unsigned int texnum, float scale );
 remixapi_MaterialHandle R_Textures_GetEmissiveMaterial( unsigned int texnum );
+// An additive brush texture XashRT dims to nothing because its lights' fog replaces the shaft it fakes
+// (c0a0yellow, "intro sun volumetrics"): not drawn while volumetric fog is on
+qboolean                R_Textures_IsFakeLightShaft( unsigned int texnum );
 remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float brightness, qboolean repeat );
 qboolean                R_Textures_GetAverageColor( unsigned int texnum, float color[3] );
 

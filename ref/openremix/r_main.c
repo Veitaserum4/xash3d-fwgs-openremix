@@ -44,7 +44,7 @@ static rt_setting_t s_settings[] =
 };
 
 // Fog cvars are owned by r_lights.c; changes re-apply the volumetric configuration
-static const char *s_fogCvars[] = { "rt_fog", "rt_fog_distance", "rt_fog_scattering" };
+static const char *s_fogCvars[] = { "rt_fog", "rt_fog_distance", "rt_fog_scattering", "rt_light_range" };
 static char s_fogApplied[ARRAYSIZE( s_fogCvars )][32];
 
 /*
@@ -64,6 +64,8 @@ static const struct { const char *key, *value; } s_xashDefaults[] =
 	{ "rtx.native.pathtrace.volumetrics",              "1" },
 	{ "rtx.native.pathtrace.volumetricHistory",        "6" },
 	{ "rtx.native.pathtrace.volumetricUpdateInterval", "4" },
+	{ "rtx.native.pathtrace.volumetricUpAxis",         "2" }, // Z-up
+	{ "rtx.native.pathtrace.volumetricMaxDistance",    "250" },
 };
 
 static qboolean R_Settings_ProfileSaved( void )

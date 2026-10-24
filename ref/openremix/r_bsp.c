@@ -890,7 +890,13 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 		{
 			const msurface_t *surf = &mod->surfaces[mod->firstmodelsurface];
 			if( surf->texinfo && surf->texinfo->texture )
-				emisMat = R_Textures_GetEmissiveMaterial( (unsigned int)surf->texinfo->texture->gl_texturenum );
+			{
+				const unsigned int texnum = (unsigned int)surf->texinfo->texture->gl_texturenum;
+				// Fake light shafts: the fog's own light replaces them, as in XashRT
+				if( R_Textures_IsFakeLightShaft( texnum ))
+					return;
+				emisMat = R_Textures_GetEmissiveMaterial( texnum );
+			}
 		}
 
 		if( emisMat )
