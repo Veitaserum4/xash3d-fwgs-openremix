@@ -1267,6 +1267,10 @@ void R_XRT_DrawScene( void )
 						s_scene.lights[i] = handle;
 					}
 					s_scene.lightApplied[i] = styleScale;
+
+					cvar_t *debug = gEngfuncs.pfnGetCvarPointer( "rt_debug" );
+					if( debug && debug->value > 0.0f )
+						gEngfuncs.Con_Printf( "light style %d: XashRT light %d now %.2f\n", s_scene.lightStyle[i], i, styleScale );
 				}
 				if( styleScale <= 0.0f )
 					continue; // switched off

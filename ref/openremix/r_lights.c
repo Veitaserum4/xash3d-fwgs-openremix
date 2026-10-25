@@ -448,6 +448,10 @@ static void R_Lights_ApplyStyle( parsed_light_t *l, float scale )
 		l->handle = handle;
 	}
 	l->styleApplied = scale;
+
+	cvar_t *debug = gEngfuncs.pfnGetCvarPointer( "rt_debug" );
+	if( debug && debug->value > 0.0f )
+		gEngfuncs.Con_Printf( "light style %d: map light at %.0f %.0f %.0f now %.2f\n", l->style, l->origin[0], l->origin[1], l->origin[2], scale );
 }
 
 /*

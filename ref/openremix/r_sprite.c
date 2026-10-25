@@ -97,9 +97,11 @@ remixapi_MaterialHandle R_GetSpriteMaterial( int texnum )
  */
 static cvar_t *rt_tracer_emis = NULL;
 static cvar_t *rt_glow_sprites = NULL;
+static cvar_t *rt_sprite_debug = NULL;
 
 void R_Sprite_Init( void )
 {
+	rt_sprite_debug = gEngfuncs.Cvar_Get( "rt_debug", "0", 0, "Print what the renderer draws and changes: each kind of sprite (model, render mode, effects, scale), light style changes" );
 	rt_glow_sprites = gEngfuncs.Cvar_Get( "rt_glow_sprites", "0", FCVAR_ARCHIVE, "Draw the glare sprites that fake bloom on lights (they grow with distance)" );
 	rt_tracer_emis = gEngfuncs.Cvar_Get( "rt_tracer_emis", "6", FCVAR_ARCHIVE, "Glow of sparks and tracers, relative to other additive effects (rt_fx_emis)" );
 
@@ -348,6 +350,14 @@ qboolean R_SpriteOccluded( cl_entity_t *e, vec3_t origin, float *pscale )
 	return false;
 }
 
+static uint32_t R_SpriteDebugHash( const char *name )
+{
+	uint32_t h = 2166136261u;
+	while( *name )
+		h = ( h ^ (uint8_t)*name++ ) * 16777619u;
+	return h;
+}
+
 /*
  * R_DrawSpriteModel - Main sprite rendering callback
  */
@@ -359,9 +369,27 @@ void R_DrawSpriteModel( cl_entity_t *e )
 	if( !g_unitQuadMesh || !g_remix.DrawInstance )
 		return;
 
-	// Glare sprites (glow render mode, dissipating) fake bloom on lights: they grow with distance
-	// and fade when occluded. The path tracer's lights and bloom make them look out of place
-	if( e->curstate.rendermode == kRenderGlow && e->curstate.renderfx != kRenderFxNoDissipation &&
+	if( rt_sprite_debug && rt_sprite_debug->value > 0.0f )
+	{
+		static uint32_t seen[256];
+		static int numSeen = 0;
+		const uint32_t key = R_SpriteDebugHash( e->model->name ) ^ (uint32_t)( ( e->curstate.rendermode << 8 ) ^ ( e->curstate.renderfx << 16 ) ^ ( (int)( e->curstate.scale * 100 ) << 24 ) );
+		qboolean known = false;
+		for( int i = 0; i < numSeen && !known; i++ )
+			known = seen[i] == key;
+		if( !known && numSeen < ARRAYSIZE( seen ))
+		{
+			seen[numSeen++] = key;
+			gEngfuncs.Con_Printf( "sprite: %s ent %d rendermode %d renderfx %d amt %d scale %.2f origin %.0f %.0f %.0f\n", e->model->name, e->index,
+			                      e->curstate.rendermode, e->curstate.renderfx, e->curstate.renderamt, e->curstate.scale, e->origin[0], e->origin[1], e->origin[2] );
+		}
+	}
+
+	// Glare sprites (glow render mode) fake bloom on lights: the dissipating ones grow with distance
+	// and fade when occluded, the others (env_glow's flare1 and glow01) stay at full brightness.
+	// The path tracer's lights and bloom make them look out of place. Temp entities (index 0) in
+	// this mode with no dissipation are effects, such as ricochets, and stay
+	if( e->curstate.rendermode == kRenderGlow && ( e->curstate.renderfx != kRenderFxNoDissipation || e->index > 0 ) &&
 	    !( rt_glow_sprites && rt_glow_sprites->value > 0.0f ))
 		return;
 

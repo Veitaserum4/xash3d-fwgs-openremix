@@ -260,7 +260,7 @@ static qboolean R_BSP_IsSubmodelGlass( const model_t *submod, const char *subNam
 //
 // Extract Surfaces and Build a Batched Mesh
 //
-static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int firstSurf, int numSurfs, uint64_t meshHash, qboolean isGlass, qboolean waterSides )
+static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int firstSurf, int numSurfs, uint64_t meshHash, qboolean isGlass, qboolean waterSides, qboolean alternate )
 {
 	if( !mod || numSurfs <= 0 )
 		return NULL;
@@ -318,23 +318,29 @@ static remixapi_MeshHandle R_BSP_BuildMeshFromSurfaces( const model_t *mod, int 
 			}
 		}
 
+		// A brush entity in its second state (frame 1: a pressed button, a switched light) shows
+		// each texture's alternate (+A...), as the GL renderer's R_TextureAnim does
+		texture_t *surfTexture = surf->texinfo ? surf->texinfo->texture : NULL;
+		if( alternate && surfTexture && surfTexture->alternate_anims )
+			surfTexture = surfTexture->alternate_anims;
+
 		// Find bucket index
 		int bucketIdx = 0;
-		if( textures && surf->texinfo && surf->texinfo->texture )
+		if( textures && surfTexture )
 		{
 			for( int t = 0; t < numTextures; t++ )
 			{
-				if( textures[t] == surf->texinfo->texture )
+				if( textures[t] == surfTexture )
 				{
 					bucketIdx = t;
 					break;
 				}
 			}
-			buckets[bucketIdx].texture = surf->texinfo->texture;
+			buckets[bucketIdx].texture = surfTexture;
 		}
-		else if( surf->texinfo && surf->texinfo->texture )
+		else if( surfTexture )
 		{
-			buckets[0].texture = surf->texinfo->texture;
+			buckets[0].texture = surfTexture;
 		}
 
 		bsp_bucket_t *b = &buckets[bucketIdx];
@@ -526,6 +532,10 @@ void R_BSP_Teardown( void )
 		if( g_bspState.submodels[i].sidesMeshHandle && g_remix.DestroyMesh )
 			g_remix.DestroyMesh( g_bspState.submodels[i].sidesMeshHandle );
 		g_bspState.submodels[i].sidesMeshHandle = NULL;
+		if( g_bspState.submodels[i].altMeshHandle && g_remix.DestroyMesh )
+			g_remix.DestroyMesh( g_bspState.submodels[i].altMeshHandle );
+		g_bspState.submodels[i].altMeshHandle = NULL;
+		g_bspState.submodels[i].altChecked    = false;
 	}
 	g_bspState.numSubmodels = 0;
 }
@@ -548,7 +558,7 @@ void R_BSP_NewMap( model_t *worldmodel )
 	// 1. Build Static World Mesh
 	uint64_t worldHash = R_HashString64( worldmodel->name );
 	g_bspState.worldMeshHash = worldHash;
-	g_bspState.worldMesh = R_BSP_BuildMeshFromSurfaces( worldmodel, 0, worldmodel->nummodelsurfaces, worldHash, false, false );
+	g_bspState.worldMesh = R_BSP_BuildMeshFromSurfaces( worldmodel, 0, worldmodel->nummodelsurfaces, worldHash, false, false, false );
 
 	gEngfuncs.Con_Reportf( "^2ref_openremix: Built static world BLAS for %s (handle %p, hash 0x%llx)^7\n",
 	                       worldmodel->name, (void *)g_bspState.worldMesh, (unsigned long long)worldHash );
@@ -587,7 +597,7 @@ void R_BSP_NewMap( model_t *worldmodel )
 
 			qboolean isGlass = R_BSP_IsSubmodelGlass( submod, subName );
 			remixapi_MeshHandle subMesh = R_BSP_BuildMeshFromSurfaces( submod, submod->firstmodelsurface,
-			                                                          submod->nummodelsurfaces, subHash, isGlass, false );
+			                                                          submod->nummodelsurfaces, subHash, isGlass, false, false );
 			if( subMesh )
 			{
 				bsp_submodel_mesh_t *entry = &g_bspState.submodels[g_bspState.numSubmodels++];
@@ -595,6 +605,9 @@ void R_BSP_NewMap( model_t *worldmodel )
 				entry->meshHandle = subMesh;
 				entry->hash       = subHash;
 				entry->isGlass    = isGlass;
+				entry->sidesMeshHandle = NULL;
+				entry->altMeshHandle   = NULL;
+				entry->altChecked      = false;
 				Q_strncpy( entry->name, subName, sizeof( entry->name ) );
 			}
 		}
@@ -606,7 +619,7 @@ void R_BSP_NewMap( model_t *worldmodel )
 //
 // Submodel Lookup (with on-demand construction fallback)
 //
-remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod, qboolean waterSides )
+remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod, qboolean waterSides, qboolean alternate )
 {
 	if( !mod || mod->type != mod_brush || mod->nummodelsurfaces <= 0 )
 		return NULL;
@@ -616,12 +629,31 @@ remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod, qboolean waterSides )
 		bsp_submodel_mesh_t *entry = &g_bspState.submodels[i];
 		if( entry->model != mod && strcmp( entry->name, mod->name ) )
 			continue;
+		if( alternate && entry->meshHandle )
+		{
+			// The same submodel with its alternate textures, under its own hash
+			if( !entry->altChecked )
+			{
+				entry->altChecked = true;
+				qboolean any = false;
+				for( int s = 0; s < mod->nummodelsurfaces && !any; s++ )
+				{
+					const msurface_t *surf = &mod->surfaces[mod->firstmodelsurface + s];
+					any = surf->texinfo && surf->texinfo->texture && surf->texinfo->texture->alternate_anims;
+				}
+				if( any )
+					entry->altMeshHandle = R_BSP_BuildMeshFromSurfaces( mod, mod->firstmodelsurface, mod->nummodelsurfaces,
+					                                                    entry->hash ^ 0x414C54ULL, entry->isGlass, false, true );
+			}
+			if( entry->altMeshHandle )
+				return entry->altMeshHandle;
+		}
 		if( !waterSides || !entry->meshHandle )
 			return entry->meshHandle;
 		// The same submodel with its water's sides, under its own hash
 		if( !entry->sidesMeshHandle )
 			entry->sidesMeshHandle = R_BSP_BuildMeshFromSurfaces( mod, mod->firstmodelsurface, mod->nummodelsurfaces,
-			                                                      entry->hash ^ 0x5349444553ULL, entry->isGlass, true );
+			                                                      entry->hash ^ 0x5349444553ULL, entry->isGlass, true, false );
 		return entry->sidesMeshHandle ? entry->sidesMeshHandle : entry->meshHandle;
 	}
 
@@ -635,7 +667,7 @@ remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod, qboolean waterSides )
 
 		qboolean isGlass = R_BSP_IsSubmodelGlass( mod, mod->name );
 		remixapi_MeshHandle subMesh = R_BSP_BuildMeshFromSurfaces( mod, mod->firstmodelsurface,
-		                                                          mod->nummodelsurfaces, subHash, isGlass, false );
+		                                                          mod->nummodelsurfaces, subHash, isGlass, false, false );
 		if( subMesh )
 		{
 			bsp_submodel_mesh_t *entry = &g_bspState.submodels[g_bspState.numSubmodels++];
@@ -643,6 +675,9 @@ remixapi_MeshHandle R_BSP_GetSubmodelMesh( model_t *mod, qboolean waterSides )
 			entry->meshHandle = subMesh;
 			entry->hash       = subHash;
 			entry->isGlass    = isGlass;
+			entry->sidesMeshHandle = NULL;
+			entry->altMeshHandle   = NULL;
+			entry->altChecked      = false;
 			Q_strncpy( entry->name, mod->name, sizeof( entry->name ) );
 			gEngfuncs.Con_Reportf( "^2ref_openremix: Built brush submodel BLAS on-demand for %s (handle %p, glass=%d)^7\n",
 			                       mod->name, (void *)subMesh, (int)isGlass );
@@ -770,7 +805,7 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	if( !ent || !ent->model || ent->model->type != mod_brush )
 		return;
 
-	remixapi_MeshHandle subMesh = R_BSP_GetSubmodelMesh( ent->model, FBitSet( ent->curstate.effects, EF_WATERSIDES ) != 0 );
+	remixapi_MeshHandle subMesh = R_BSP_GetSubmodelMesh( ent->model, FBitSet( ent->curstate.effects, EF_WATERSIDES ) != 0, ent->curstate.frame != 0 );
 	if( !subMesh || !g_remix.DrawInstance )
 		return;
 
