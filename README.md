@@ -69,6 +69,7 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_water_fog` | 1 | Underwater fog density relative to Half-Life's (0 = clear) |
 | `rt_chrome`, `rt_chrome_reflectance`, `rt_chrome_roughness` | 1, 0.6, 0.3 | Model chrome without XashRT materials as real metal, its reflectance and roughness (`rt_chrome 0` = classic fake chrome) |
 | `rt_fx_emis` | 4 | Glow of beams and sprites |
+| `rt_fx_lights` | 0 | Beams, sprites and sparks light their surroundings as emitters, on texture load (off: they only glow; on is very slow with many effects, as in the Resonance Cascade) |
 | `rt_debug` | 0 | Print what the renderer draws and changes (sprites, light style changes) to the console |
 | `rt_glow_sprites` | 0 | Draw the glare sprites that fake bloom on lights (they grow with distance) |
 | `rt_tracer_emis` | 6 | Glow of sparks and tracers, relative to `rt_fx_emis` |

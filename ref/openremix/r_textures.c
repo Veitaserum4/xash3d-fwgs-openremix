@@ -26,6 +26,7 @@ static cvar_t *rt_glass_texture = NULL;
 static cvar_t *rt_chrome        = NULL;
 static cvar_t *rt_liquid_emis   = NULL;
 static cvar_t *rt_texture_nearest = NULL;
+static cvar_t *rt_fx_lights = NULL;
 
 // Set while R_Textures_CheckSettings remakes the material of this texture slot (0: none)
 static int s_rebuildTexnum = 0;
@@ -437,6 +438,7 @@ void R_Textures_Init( void )
 		rt_glass_tint_g = gEngfuncs.Cvar_Get( "rt_glass_tint_g", "0.99", FCVAR_ARCHIVE, "Glass transmittance color Green" );
 		rt_glass_tint_b = gEngfuncs.Cvar_Get( "rt_glass_tint_b", "1.00", FCVAR_ARCHIVE, "Glass transmittance color Blue" );
 		rt_texture_nearest = gEngfuncs.Cvar_Get( "rt_texture_nearest", "0", FCVAR_ARCHIVE, "Nearest-neighbour texture filtering (crisp texels, as Half-Life without filtering)" );
+		rt_fx_lights = gEngfuncs.Cvar_Get( "rt_fx_lights", "0", FCVAR_ARCHIVE, "Beams, sprites and sparks light their surroundings as emitters (very slow with many effects); applies on texture load" );
 		R_AutoPBR_Init();
 	}
 
@@ -610,6 +612,18 @@ static void R_Textures_DestroyFx( remix_texture_t *entry )
 	entry->emisMatHandle = NULL;
 }
 
+// Effects (beams, sprites, sparks) glow without lighting their surroundings as emitters: their
+// meshes change every frame, and every triangle that has ever been one stays a retired light slot
+// in OpenRemix's light tree, rebuilt and uploaded each frame (the Resonance Cascade: 487,000 slots,
+// 167 ms a frame). rt_fx_lights 1 lets them light the scene
+static void R_Textures_FxEmission( remixapi_MaterialInfoEmissionEXT *emission, remixapi_MaterialInfoSelfIlluminationEXT *self )
+{
+	memset( emission, 0, sizeof( *emission ) );
+	emission->sType                   = REMIXAPI_STRUCT_TYPE_MATERIAL_EMISSION_EXT;
+	emission->suppressLightGeneration = rt_fx_lights && rt_fx_lights->value > 0.0f ? 0 : 1;
+	self->pNext                       = emission;
+}
+
 /*
  * R_Textures_CreateFx - Build the path-traced stand-in for an additive sprite frame.
  * The path tracer only blends by coverage, so alpha becomes the texel's brightness
@@ -682,6 +696,8 @@ static void R_Textures_CreateFx( remix_texture_t *entry, const char *name, uint3
 	selfExt.sType     = REMIXAPI_STRUCT_TYPE_MATERIAL_SELF_ILLUMINATION_EXT;
 	selfExt.mask      = REMIXAPI_SELF_ILLUMINATION_MASK_NONE_EXT;
 	selfExt.maskScale = 1.0f;
+	remixapi_MaterialInfoEmissionEXT fxEmission;
+	R_Textures_FxEmission( &fxEmission, &selfExt );
 
 	remixapi_MaterialInfoOpaqueEXT opaqueExt;
 	memset( &opaqueExt, 0, sizeof( opaqueExt ) );
@@ -800,6 +816,8 @@ remixapi_MaterialHandle R_Textures_GetFxMaterialScaled( unsigned int texnum, flo
 	selfExt.sType     = REMIXAPI_STRUCT_TYPE_MATERIAL_SELF_ILLUMINATION_EXT;
 	selfExt.mask      = REMIXAPI_SELF_ILLUMINATION_MASK_NONE_EXT;
 	selfExt.maskScale = 1.0f;
+	remixapi_MaterialInfoEmissionEXT fxEmission;
+	R_Textures_FxEmission( &fxEmission, &selfExt );
 
 	remixapi_MaterialInfoOpaqueEXT opaqueExt;
 	memset( &opaqueExt, 0, sizeof( opaqueExt ) );

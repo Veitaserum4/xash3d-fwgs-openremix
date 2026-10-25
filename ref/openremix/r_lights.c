@@ -396,9 +396,14 @@ lights ("style" 32+, such as the Resonance Cascade's phases) and flickering ones
 */
 #define R_MAX_LIGHTSTYLES 256
 static float s_styleScale[R_MAX_LIGHTSTYLES];
+static cvar_t *rt_lightstyles = NULL;
 
 float R_Lights_StyleScale( int style )
 {
+	if( !rt_lightstyles )
+		rt_lightstyles = gEngfuncs.Cvar_Get( "rt_lightstyles", "1", FCVAR_ARCHIVE, "Lights follow their light styles (switches, flickers); 0: always on" );
+	if( rt_lightstyles->value <= 0.0f )
+		return 1.0f;
 	return ( style > 0 && style < R_MAX_LIGHTSTYLES ) ? s_styleScale[style] : 1.0f;
 }
 
