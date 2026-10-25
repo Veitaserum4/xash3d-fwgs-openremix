@@ -30,6 +30,11 @@ typedef struct parsed_light_s
 	int                  style;
 	uint64_t             hash;
 	remixapi_LightHandle handle;
+
+	// Kept to make the light again when its light style changes (r_lights.c R_Lights_ApplyStyle)
+	remixapi_LightInfoSphereEXT     sphere;
+	remixapi_LightInfoIesProfileEXT ies;
+	float                           styleApplied;
 } parsed_light_t;
 
 typedef struct lights_state_s
@@ -60,6 +65,9 @@ void R_Lights_Shutdown( void );
 void R_Lights_NewMap( const char *entities );
 void R_Lights_DrawFrame( void );
 void R_Lights_UpdateVolumetrics( void );
+// Light styles: the engine's animated and switchable lights ('a' off, 'm' normal, 'z' double)
+void  R_Lights_RunStyles( lightstyle_t *ls );
+float R_Lights_StyleScale( int style );
 void R_Lights_ApplyFogState( void );
 
 #ifdef __cplusplus

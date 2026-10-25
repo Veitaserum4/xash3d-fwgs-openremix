@@ -161,7 +161,7 @@ static void GL_SubdivideSurface_Stub( model_t *mod, msurface_t *fa )
 
 static void CL_RunLightStyles_Stub( lightstyle_t *ls )
 {
-	(void)ls;
+	R_Lights_RunStyles( ls );
 }
 
 static qboolean Mod_ProcessRenderData_Stub( model_t *mod, qboolean create, const byte *buffer, size_t buffersize )

@@ -636,6 +636,12 @@ static struct
 	int                     numInstances;
 	remixapi_LightHandle    lights[MAX_XRT_LIGHTS];
 	int                     numLights;
+	// What a light needs to be made again when its light style changes
+	remixapi_LightInfoSphereEXT lightSphere[MAX_XRT_LIGHTS];
+	float                   lightRadiance[MAX_XRT_LIGHTS][3];
+	uint64_t                lightHash[MAX_XRT_LIGHTS];
+	int                     lightStyle[MAX_XRT_LIGHTS];
+	float                   lightApplied[MAX_XRT_LIGHTS];
 } s_scene;
 
 static void R_XRT_FreeScene( void )
@@ -1047,17 +1053,28 @@ static void R_XRT_AddLight( const jval_t *light, const float m[16], uint64_t has
 		sphere.shaping_value.focusExponent    = 1.0f;
 	}
 
+	const int slot = s_scene.numLights;
+	s_scene.lightSphere[slot] = sphere;
+
 	remixapi_LightInfo info;
 	memset( &info, 0, sizeof( info ) );
 	info.sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
-	info.pNext      = &sphere;
+	info.pNext      = &s_scene.lightSphere[slot];
 	info.hash       = hash;
 	info.radiance.x = (float)J_Num( J_At( color, 0 ), 1.0 ) * scale;
 	info.radiance.y = (float)J_Num( J_At( color, 1 ), 1.0 ) * scale;
 	info.radiance.z = (float)J_Num( J_At( color, 2 ), 1.0 ) * scale;
 
-	if( g_remix.CreateLight( &info, &s_scene.lights[s_scene.numLights] ) == REMIXAPI_ERROR_CODE_SUCCESS )
+	if( g_remix.CreateLight( &info, &s_scene.lights[slot] ) == REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		s_scene.lightRadiance[slot][0] = info.radiance.x;
+		s_scene.lightRadiance[slot][1] = info.radiance.y;
+		s_scene.lightRadiance[slot][2] = info.radiance.z;
+		s_scene.lightHash[slot]        = hash;
+		s_scene.lightStyle[slot]       = J_Int( J_Get( J_Get( light, "extras" ), "lightstyle" ), 0 );
+		s_scene.lightApplied[slot]     = 1.0f;
 		s_scene.numLights++;
+	}
 }
 
 static void R_XRT_VisitNode( int nodeIndex, const float parent[16], int depth )
@@ -1224,8 +1241,39 @@ void R_XRT_DrawScene( void )
 	}
 
 	if( g_remix.DrawLightInstance )
+	{
 		for( int i = 0; i < s_scene.numLights; i++ )
+		{
+			// A light that follows a light style (a switch, a flicker) is made again at its brightness
+			if( s_scene.lightStyle[i] > 0 && g_remix.CreateLight )
+			{
+				const float styleScale = R_Lights_StyleScale( s_scene.lightStyle[i] );
+				if( styleScale != s_scene.lightApplied[i] )
+				{
+					remixapi_LightInfo info;
+					memset( &info, 0, sizeof( info ) );
+					info.sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+					info.pNext      = &s_scene.lightSphere[i];
+					info.hash       = s_scene.lightHash[i];
+					info.radiance.x = s_scene.lightRadiance[i][0] * styleScale;
+					info.radiance.y = s_scene.lightRadiance[i][1] * styleScale;
+					info.radiance.z = s_scene.lightRadiance[i][2] * styleScale;
+
+					remixapi_LightHandle handle = NULL;
+					if( g_remix.CreateLight( &info, &handle ) == REMIXAPI_ERROR_CODE_SUCCESS )
+					{
+						if( s_scene.lights[i] && g_remix.DestroyLight )
+							g_remix.DestroyLight( s_scene.lights[i] );
+						s_scene.lights[i] = handle;
+					}
+					s_scene.lightApplied[i] = styleScale;
+				}
+				if( styleScale <= 0.0f )
+					continue; // switched off
+			}
 			g_remix.DrawLightInstance( s_scene.lights[i] );
+		}
+	}
 }
 
 void R_XRT_Init( void )

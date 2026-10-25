@@ -387,6 +387,71 @@ void R_Lights_Shutdown( void )
 
 /*
 ====================
+Light styles
+
+The engine's CL_RunLightStyles belongs to its renderer: here it keeps each style's current
+brightness (a pattern letter, 'm' = 1) for the lights that follow one: a map's switchable
+lights ("style" 32+, such as the Resonance Cascade's phases) and flickering ones
+====================
+*/
+#define R_MAX_LIGHTSTYLES 256
+static float s_styleScale[R_MAX_LIGHTSTYLES];
+
+float R_Lights_StyleScale( int style )
+{
+	return ( style > 0 && style < R_MAX_LIGHTSTYLES ) ? s_styleScale[style] : 1.0f;
+}
+
+void R_Lights_RunStyles( lightstyle_t *ls )
+{
+	if( !gp_cl || !ls )
+		return;
+
+	const float frametime = gp_cl->time - gp_cl->oldtime;
+	for( int i = 0; i < R_MAX_LIGHTSTYLES; i++ )
+	{
+		// As the engine's: the style's own clock starts its pattern from the start
+		if( !gp_cl->paused && frametime <= 0.1f )
+			ls[i].time += frametime;
+
+		if( ls[i].length <= 0 )
+		{
+			s_styleScale[i] = 1.0f; // no pattern sent: lit
+			continue;
+		}
+
+		const int frame = ls[i].length == 1 ? 0 : (int)floor( ls[i].time * 10 ) % ls[i].length;
+		s_styleScale[i] = ls[i].map[frame] / 12.0f;
+	}
+}
+
+// Makes a styled map light again at its style's brightness
+static void R_Lights_ApplyStyle( parsed_light_t *l, float scale )
+{
+	if( !g_remix.CreateLight )
+		return;
+
+	remixapi_LightInfo info;
+	memset( &info, 0, sizeof( info ) );
+	info.sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+	info.pNext      = &l->sphere;
+	info.hash       = l->hash;
+	info.radiance.x = l->radiance.x * scale;
+	info.radiance.y = l->radiance.y * scale;
+	info.radiance.z = l->radiance.z * scale;
+
+	remixapi_LightHandle handle = NULL;
+	if( g_remix.CreateLight( &info, &handle ) == REMIXAPI_ERROR_CODE_SUCCESS )
+	{
+		if( l->handle && g_remix.DestroyLight )
+			g_remix.DestroyLight( l->handle );
+		l->handle = handle;
+	}
+	l->styleApplied = scale;
+}
+
+/*
+====================
 R_Lights_ApplyFogState
 
 Half-Life sets no fog the path tracer could scatter in, so volumetrics (light shafts) would
@@ -600,10 +665,19 @@ void R_Lights_NewMap( const char *entities )
 						sphereExt.shaping_value.focusExponent    = 1.0f;
 					}
 
+					// The light's definition stays with it, to make it again when its style changes
+					dst->sphere = sphereExt;
+					if( ies )
+					{
+						dst->ies         = iesExt;
+						dst->sphere.pNext = &dst->ies;
+					}
+					dst->styleApplied = 1.0f;
+
 					remixapi_LightInfo lightInfo;
 					memset( &lightInfo, 0, sizeof( lightInfo ) );
 					lightInfo.sType     = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
-					lightInfo.pNext     = &sphereExt;
+					lightInfo.pNext     = &dst->sphere;
 					lightInfo.hash      = dst->hash;
 					lightInfo.radiance  = dst->radiance;
 					lightInfo.isDynamic = 0;
@@ -899,8 +973,19 @@ void R_Lights_DrawFrame( void )
 	// 1. Submit static map lights
 	for( uint32_t i = 0; i < g_lights.static_lights_count; i++ )
 	{
-		if( g_lights.static_lights[i].handle )
-			g_remix.DrawLightInstance( g_lights.static_lights[i].handle );
+		parsed_light_t *l = &g_lights.static_lights[i];
+		if( !l->handle )
+			continue;
+
+		if( l->style > 0 )
+		{
+			const float scale = R_Lights_StyleScale( l->style );
+			if( scale != l->styleApplied )
+				R_Lights_ApplyStyle( l, scale );
+			if( scale <= 0.0f )
+				continue; // switched off
+		}
+		g_remix.DrawLightInstance( l->handle );
 	}
 
 	// 2. Submit sun distant light
