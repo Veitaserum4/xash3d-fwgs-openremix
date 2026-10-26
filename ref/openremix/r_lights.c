@@ -401,8 +401,11 @@ static cvar_t *rt_lightstyles = NULL;
 float R_Lights_StyleScale( int style )
 {
 	if( !rt_lightstyles )
-		rt_lightstyles = gEngfuncs.Cvar_Get( "rt_lightstyles", "1", FCVAR_ARCHIVE, "Lights follow their light styles (switches, flickers); 0: always on" );
+		rt_lightstyles = gEngfuncs.Cvar_Get( "rt_lightstyles", "1", FCVAR_ARCHIVE, "Lights follow their light styles: 1 switches only (32+), 2 also the animated presets (flicker, strobe), 0 always on" );
 	if( rt_lightstyles->value <= 0.0f )
+		return 1.0f;
+	// The presets (1-31) loop forever, so they would recreate their lights ten times a second
+	if( style < 32 && rt_lightstyles->value < 2.0f )
 		return 1.0f;
 	return ( style > 0 && style < R_MAX_LIGHTSTYLES ) ? s_styleScale[style] : 1.0f;
 }
@@ -413,8 +416,15 @@ void R_Lights_RunStyles( lightstyle_t *ls )
 		return;
 
 	const float frametime = gp_cl->time - gp_cl->oldtime;
+	cvar_t *debug = gEngfuncs.pfnGetCvarPointer( "rt_debug" );
+	static char seenPattern[R_MAX_LIGHTSTYLES][32];
 	for( int i = 0; i < R_MAX_LIGHTSTYLES; i++ )
 	{
+		if( debug && debug->value > 0.0f && strncmp( seenPattern[i], ls[i].pattern, sizeof( seenPattern[i] ) - 1 ))
+		{
+			Q_strncpy( seenPattern[i], ls[i].pattern, sizeof( seenPattern[i] ));
+			gEngfuncs.Con_Printf( "light style %d pattern \"%s\" length %d\n", i, ls[i].pattern, ls[i].length );
+		}
 		// As the engine's: the style's own clock starts its pattern from the start
 		if( !gp_cl->paused && frametime <= 0.1f )
 			ls[i].time += frametime;
