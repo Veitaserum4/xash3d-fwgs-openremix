@@ -96,9 +96,19 @@ static uint32_t FS_MountFlags( void )
 	return flags;
 }
 
+static uint32_t fs_mounted_flags = 0;
+
 void FS_Rescan_f( void )
 {
-	g_fsapi.Rescan( FS_MountFlags(), ui_language.string );
+	fs_mounted_flags = FS_MountFlags();
+	g_fsapi.Rescan( fs_mounted_flags, ui_language.string );
+}
+
+// A mount option changed in the menu (HD content): mount it before the next level's files are read
+void FS_RescanIfMountChanged( void )
+{
+	if( FS_MountFlags() != fs_mounted_flags )
+		FS_Rescan_f();
 }
 
 static void FS_LoadVFSConfig( const char *gamedir )
@@ -162,7 +172,8 @@ void FS_LoadGameInfo( void )
 {
 	FS_LoadVFSConfig( g_fsapi.Gamedir( ));
 
-	g_fsapi.LoadGameInfo( FS_MountFlags(), ui_language.string );
+	fs_mounted_flags = FS_MountFlags();
+	g_fsapi.LoadGameInfo( fs_mounted_flags, ui_language.string );
 }
 
 static void FS_ClearPaths_f( void )

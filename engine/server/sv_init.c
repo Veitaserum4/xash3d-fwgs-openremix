@@ -940,6 +940,8 @@ clients along with it.
 */
 qboolean SV_SpawnServer( const char *mapname, const char *startspot, qboolean background )
 {
+	FS_RescanIfMountChanged(); // HD content switched in the menu
+
 	int		i;
 
 	SV_SetupClients();
