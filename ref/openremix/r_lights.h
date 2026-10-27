@@ -67,6 +67,8 @@ void R_Lights_DrawFrame( void );
 void R_Lights_UpdateVolumetrics( void );
 // Light styles: the engine's animated and switchable lights ('a' off, 'm' normal, 'z' double)
 void  R_Lights_RunStyles( lightstyle_t *ls );
+// A beam's light: point lights along it, queued while it is drawn and submitted with the frame's lights
+void  R_Lights_AddBeamLight( const vec3_t start, const vec3_t end, float r, float g, float b, float brightness );
 float R_Lights_StyleScale( int style );
 void R_Lights_ApplyFogState( void );
 

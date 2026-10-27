@@ -246,7 +246,7 @@ static cvar_t *rt_flsh_u           = NULL;
 static cvar_t *rt_light_s          = NULL;
 static cvar_t *rt_light_d          = NULL;
 static cvar_t *rt_light_e          = NULL;
-static cvar_t *rt_entity_lights    = NULL;
+static cvar_t *rt_beam_light       = NULL;
 static cvar_t *rt_light_radius     = NULL;
 static cvar_t *rt_light_range      = NULL;
 static cvar_t *rt_emis             = NULL;
@@ -309,7 +309,7 @@ void R_Lights_Init( void )
 		rt_flsh_u          = gEngfuncs.Cvar_Get( "rt_flsh_u", "-2.5", FCVAR_ARCHIVE, "Player flashlight up offset" );
 		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "500", FCVAR_ARCHIVE, "Map static light intensity scale" );
 		rt_light_d         = gEngfuncs.Cvar_Get( "rt_light_d", "1000", FCVAR_ARCHIVE, "Dynamic lights (explosions/projectiles) intensity scale" );
-		rt_entity_lights   = gEngfuncs.Cvar_Get( "rt_entity_lights", "0", FCVAR_ARCHIVE, "Rockets and hornets (entities with EF_LIGHT) light the scene as the original engine's dynamic lights" );
+		rt_beam_light      = gEngfuncs.Cvar_Get( "rt_beam_light", "600", FCVAR_ARCHIVE, "How strongly beams (gluon gun, lasers, lightning) light their surroundings; 0: they only glow" );
 		rt_light_e         = gEngfuncs.Cvar_Get( "rt_light_e", "5000", FCVAR_ARCHIVE, "Entity lights (controller orbs, Nihilanth's spheres) intensity" );
 		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
 		rt_light_range     = gEngfuncs.Cvar_Get( "rt_light_range", "0", FCVAR_ARCHIVE, "Local light cutoff range (0 = unlimited physical falloff)" );
@@ -983,6 +983,75 @@ static void R_Lights_SubmitPointDlight( const dlight_t *l, int index, float d_sc
 
 /*
 ====================
+Beam lights
+
+A beam's glow alone lights little: a few point lights along it carry its light. They take the
+last slots of the dynamic lights
+====================
+*/
+#define R_MAX_BEAM_LIGHTS 16
+static struct { vec3_t origin; vec3_t radiance; } s_beamLights[R_MAX_BEAM_LIGHTS];
+static int s_numBeamLights;
+
+void R_Lights_AddBeamLight( const vec3_t start, const vec3_t end, float r, float g, float b, float brightness )
+{
+	const float strength = rt_beam_light ? rt_beam_light->value : 600.0f;
+	if( strength <= 0.0f || brightness <= 0.0f )
+		return;
+
+	vec3_t delta;
+	VectorSubtract( end, start, delta );
+	int count = (int)( VectorLength( delta ) / 160.0f ) + 1;
+	count = bound( 1, count, 4 );
+
+	// The light carried by the whole beam is shared by its lights
+	const float scale = strength * brightness / (float)count;
+	for( int i = 0; i < count && s_numBeamLights < R_MAX_BEAM_LIGHTS; i++ )
+	{
+		VectorMA( start, ( (float)i + 0.5f ) / (float)count, delta, s_beamLights[s_numBeamLights].origin );
+		VectorSet( s_beamLights[s_numBeamLights].radiance, r * scale, g * scale, b * scale );
+		s_numBeamLights++;
+	}
+}
+
+static void R_Lights_SubmitBeamLights( void )
+{
+	for( int i = 0; i < s_numBeamLights; i++ )
+	{
+		const int slot = MAX_ACTIVE_DLIGHTS - 1 - i;
+
+		remixapi_LightInfoSphereEXT sphereExt;
+		memset( &sphereExt, 0, sizeof( sphereExt ) );
+		sphereExt.sType                   = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+		sphereExt.position.x              = s_beamLights[i].origin[0];
+		sphereExt.position.y              = s_beamLights[i].origin[1];
+		sphereExt.position.z              = s_beamLights[i].origin[2];
+		sphereExt.radius                  = 2.0f;
+		sphereExt.volumetricRadianceScale = 1.0f;
+
+		remixapi_LightInfo lightInfo;
+		memset( &lightInfo, 0, sizeof( lightInfo ) );
+		lightInfo.sType      = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+		lightInfo.pNext      = &sphereExt;
+		lightInfo.hash       = 0x4245414D4C490000ULL | (uint64_t)i; // "BEAMLI" + index
+		lightInfo.radiance.x = s_beamLights[i].radiance[0];
+		lightInfo.radiance.y = s_beamLights[i].radiance[1];
+		lightInfo.radiance.z = s_beamLights[i].radiance[2];
+		lightInfo.isDynamic  = 1;
+
+		if( g_lights.dlight_handles[slot] && g_remix.DestroyLight )
+		{
+			g_remix.DestroyLight( g_lights.dlight_handles[slot] );
+			g_lights.dlight_handles[slot] = NULL;
+		}
+		if( g_remix.CreateLight && g_remix.CreateLight( &lightInfo, &g_lights.dlight_handles[slot] ) == REMIXAPI_ERROR_CODE_SUCCESS && g_remix.DrawLightInstance )
+			g_remix.DrawLightInstance( g_lights.dlight_handles[slot] );
+	}
+	s_numBeamLights = 0;
+}
+
+/*
+====================
 R_Lights_DrawFrame
 ====================
 */
@@ -1039,14 +1108,6 @@ void R_Lights_DrawFrame( void )
 				continue;
 			}
 
-			// A rocket's or a hornet's own dlight (EF_LIGHT): its glow is its flare's
-			if( l->key > 0 && !( rt_entity_lights && rt_entity_lights->value > 0.0f ))
-			{
-				const cl_entity_t *owner = CL_GetEntityByIndex( l->key );
-				if( owner && FBitSet( owner->curstate.effects, EF_LIGHT ) && !FBitSet( owner->curstate.effects, EF_BRIGHTLIGHT | EF_DIMLIGHT ))
-					continue;
-			}
-
 			R_Lights_SubmitPointDlight( l, i, d_scale, false );
 		}
 	}
@@ -1077,5 +1138,7 @@ void R_Lights_DrawFrame( void )
 			R_Lights_SubmitPointDlight( l, R_OPENREMIX_MAX_DLIGHTS + i, rt_light_e ? rt_light_e->value : 5000.0f, true );
 		}
 	}
+
+	R_Lights_SubmitBeamLights();
 }
 

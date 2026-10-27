@@ -12,6 +12,7 @@
 #include "r_efx.h"
 #include "customentity.h"
 #include "r_bsp.h"
+#include "r_lights.h"
 
 #define NOISE_DIVISIONS   64
 #define GLARE_FALLOFF     19000.0f
@@ -909,6 +910,115 @@ static qboolean R_BeamRecomputeEndpoints( BEAM *pbeam )
 	return true;
 }
 
+/*
+ * Draw a followed beam (TE_BEAMFOLLOW: rocket smoke, hornet and grenade trails). The trail is a list
+ * of engine particles dropped along the entity's path, fading out over the beam's life
+ */
+static void R_DrawBeamFollow( BEAM *pbeam, float frametime )
+{
+	gEngfuncs.R_FreeDeadParticles( &pbeam->particles );
+
+	particle_t *particles = pbeam->particles;
+	particle_t *pnew = NULL;
+
+	vec3_t delta;
+	float div = 0.0f;
+	if( FBitSet( pbeam->flags, FBEAM_STARTENTITY ))
+	{
+		if( particles )
+		{
+			VectorSubtract( particles->org, pbeam->source, delta );
+			div = VectorLength( delta );
+			if( div >= 32.0f )
+				pnew = gEngfuncs.CL_AllocParticleFast();
+		}
+		else
+		{
+			pnew = gEngfuncs.CL_AllocParticleFast();
+		}
+	}
+
+	if( pnew )
+	{
+		VectorCopy( pbeam->source, pnew->org );
+		pnew->die = gp_cl->time + pbeam->amplitude;
+		VectorClear( pnew->vel );
+		pnew->next = particles;
+		pbeam->particles = pnew;
+		particles = pnew;
+	}
+
+	if( !particles )
+		return;
+
+	vec3_t screen, screenLast;
+	if( !pnew && div != 0.0f )
+	{
+		VectorCopy( pbeam->source, delta );
+		R_UI_TriWorldToScreen( pbeam->source, screenLast );
+		R_UI_TriWorldToScreen( particles->org, screen );
+	}
+	else if( particles->next )
+	{
+		VectorCopy( particles->org, delta );
+		R_UI_TriWorldToScreen( particles->org, screenLast );
+		R_UI_TriWorldToScreen( particles->next->org, screen );
+		particles = particles->next;
+	}
+	else
+	{
+		return;
+	}
+
+	// The ribbon's side: perpendicular to the trail's direction on the screen
+	vec3_t tmp, normal, last1, last2;
+	VectorSubtract( screen, screenLast, tmp );
+	tmp[2] = 0.0f;
+	VectorNormalize( tmp );
+	VectorScale( RI.vup, tmp[0], normal );
+	VectorMA( normal, tmp[1], RI.vright, normal );
+	VectorMA( delta, pbeam->width, normal, last1 );
+	VectorMA( delta, -pbeam->width, normal, last2 );
+
+	div = 1.0f / pbeam->amplitude;
+	float fraction = ( pbeam->die - gp_cl->time ) * div;
+
+	while( particles )
+	{
+		R_UI_TriBrightness( fraction );
+		R_UI_TriTexCoord2f( 1.0f, 1.0f );
+		R_UI_TriVertex3fv( last2 );
+		R_UI_TriBrightness( fraction );
+		R_UI_TriTexCoord2f( 0.0f, 1.0f );
+		R_UI_TriVertex3fv( last1 );
+
+		R_UI_TriWorldToScreen( particles->org, screen );
+		VectorSubtract( screen, screenLast, tmp );
+		tmp[2] = 0.0f;
+		VectorNormalize( tmp );
+		VectorScale( RI.vup, tmp[0], normal );
+		VectorMA( normal, tmp[1], RI.vright, normal );
+		VectorMA( particles->org, pbeam->width, normal, last1 );
+		VectorMA( particles->org, -pbeam->width, normal, last2 );
+
+		fraction = particles->next ? ( particles->die - gp_cl->time ) * div : 0.0f;
+
+		R_UI_TriBrightness( fraction );
+		R_UI_TriTexCoord2f( 0.0f, 0.0f );
+		R_UI_TriVertex3fv( last1 );
+		R_UI_TriBrightness( fraction );
+		R_UI_TriTexCoord2f( 1.0f, 0.0f );
+		R_UI_TriVertex3fv( last2 );
+
+		VectorCopy( screen, screenLast );
+		particles = particles->next;
+	}
+
+	// Drift the trail if its particles have a velocity
+	for( particles = pbeam->particles; particles; particles = particles->next )
+		VectorMA( particles->org, frametime, particles->vel, particles->org );
+}
+
 void R_BeamDraw( BEAM *pbeam, float frametime )
 {
 	if( !pbeam )
@@ -934,7 +1044,7 @@ void R_BeamDraw( BEAM *pbeam, float frametime )
 
 	vec3_t delta;
 	VectorSubtract( pbeam->target, pbeam->source, delta );
-	if( VectorLength( delta ) < 0.1f )
+	if( VectorLength( delta ) < 0.1f && pbeam->type != TE_BEAMFOLLOW )
 		return;
 
 	pbeam->freq += frametime;
@@ -973,6 +1083,14 @@ void R_BeamDraw( BEAM *pbeam, float frametime )
 
 	switch( pbeam->type )
 	{
+	case TE_BEAMFOLLOW:
+		R_UI_TriRenderMode( kRenderTransAdd );
+		R_UI_TriColor4f( pbeam->r, pbeam->g, pbeam->b, brightness );
+		R_UI_TriBegin( TRI_QUADS );
+		R_DrawBeamFollow( pbeam, frametime );
+		R_UI_TriEnd();
+		break;
+
 	case TE_BEAMDISK:
 		R_UI_TriRenderMode( kRenderTransAdd );
 		R_UI_TriColor4f( pbeam->r, pbeam->g, pbeam->b, brightness );
@@ -1000,6 +1118,7 @@ void R_BeamDraw( BEAM *pbeam, float frametime )
 	case TE_BEAMPOINTS:
 	case TE_BEAMHOSE:
 	default:
+		R_Lights_AddBeamLight( pbeam->source, pbeam->target, pbeam->r, pbeam->g, pbeam->b, brightness );
 		R_DrawSegs( pbeam->source, delta, pbeam->width, pbeam->amplitude,
 		            pbeam->freq, pbeam->speed, segments, pbeam->flags,
 		            pbeam->r, pbeam->g, pbeam->b, brightness );
