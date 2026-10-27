@@ -26,6 +26,7 @@ GNU General Public License for more details.
 
 static model_info_t	mod_crcinfo[MAX_MODELS];
 static model_t	mod_known[MAX_MODELS];
+static qboolean	mod_reload_all; // the content changed (HD mounted): every model loads again with the next level
 static int	mod_numknown = 0;
 poolhandle_t      com_studiocache;		// cache for submodels
 CVAR_DEFINE( mod_studiocache, "r_studiocache", "1", FCVAR_ARCHIVE, "enables studio cache for speedup tracing hitboxes" );
@@ -475,11 +476,12 @@ static void Mod_PurgeStudioCache( void )
 		if( mod_known[i].type == mod_studio )
 			mod_known[i].submodels = NULL;
 
-		if( mod_known[i].name[0] == '*' )
+		if( mod_known[i].name[0] == '*' || mod_reload_all )
 			Mod_FreeModel( &mod_known[i] );
 		else
 			mod_known[i].needload = NL_FREE_UNUSED;
 	}
+	mod_reload_all = false;
 
 	Mem_EmptyPool( com_studiocache );
 	Mod_ClearStudioCache();
@@ -495,7 +497,7 @@ Loads in the map and all submodels
 model_t *Mod_LoadWorld( const char *name, qboolean preload )
 {
 	// already loaded?
-	if( !Q_stricmp( mod_known->name, name ))
+	if( !Q_stricmp( mod_known->name, name ) && !mod_reload_all )
 		return mod_known;
 
 	// free sequence files on studiomodels
@@ -519,6 +521,11 @@ Mod_FreeUnused
 Purge all unused models
 ==================
 */
+void Mod_ReloadAllNextLevel( void )
+{
+	mod_reload_all = true;
+}
+
 void Mod_FreeUnused( void )
 {
 	model_t	*mod;

@@ -25,6 +25,7 @@ GNU General Public License for more details.
 #include <errno.h>
 #include "common.h"
 #include "library.h"
+#include "mod_local.h"
 #include "platform/platform.h"
 
 #if XASH_WIN32
@@ -108,7 +109,10 @@ void FS_Rescan_f( void )
 void FS_RescanIfMountChanged( void )
 {
 	if( FS_MountFlags() != fs_mounted_flags )
+	{
 		FS_Rescan_f();
+		Mod_ReloadAllNextLevel(); // models already loaded came from the old content
+	}
 }
 
 static void FS_LoadVFSConfig( const char *gamedir )
