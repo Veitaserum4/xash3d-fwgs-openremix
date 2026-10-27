@@ -602,22 +602,49 @@ static void R_DrawSegs( const vec3_t source, const vec3_t delta, float width, fl
 	if( segments < 2 )
 		return;
 
+	float length = VectorLength( delta );
+	const float maxWidth = width * 0.5f;
+	float div = 1.0f / (float)( segments - 1 );
+
+	// Too many segments for the width would overlap: use fewer (as the GL renderer does)
+	if( length * div < maxWidth * 1.414f )
+	{
+		segments = (int)( length / ( maxWidth * 1.414f )) + 1;
+		if( segments < 2 ) segments = 2;
+	}
+
 	if( segments > NOISE_DIVISIONS )
 		segments = NOISE_DIVISIONS;
 
-	float length = VectorLength( delta ) * 0.01f;
-	if( length < 0.5f ) length = 0.5f;
-
-	float div = 1.0f / (float)( segments - 1 );
+	div = 1.0f / (float)( segments - 1 );
+	length *= 0.01f;
 	float vStep = length * div;
 	float vLast = fmodf( freq * speed, 1.0f );
-	float scale = amplitude * length;
+	float scale = amplitude;
+
+	if( FBitSet( flags, FBEAM_SINENOISE ))
+	{
+		// A spiral (the gluon gun's outer beam): at least 16 segments, its amplitude in units
+		if( segments < 16 )
+		{
+			segments = 16;
+			div = 1.0f / (float)( segments - 1 );
+		}
+		scale *= 100.0f;
+		length = segments * 0.1f;
+	}
+	else
+	{
+		scale *= length * 2.0f;
+	}
 
 	int noiseStep = (int)( (float)( NOISE_DIVISIONS - 1 ) * div * 65536.0f );
 	int noiseIndex = 0;
 
-	vec3_t perp1;
-	R_BeamComputeNormal( source, delta, perp1 );
+	vec3_t perp1, beamDir;
+	VectorNormalize2( delta, beamDir );
+	CrossProduct( RI.vforward, beamDir, perp1 );
+	VectorNormalize( perp1 );
 
 	vec3_t curSegPos, nextSegPos, vNormal, vPoint1, vPoint2;
 	VectorCopy( source, curSegPos );
@@ -648,8 +675,8 @@ static void R_DrawSegs( const vec3_t source, const vec3_t delta, float width, fl
 		}
 
 		R_BeamComputeNormal( curSegPos, nextSegPos, vNormal );
-		VectorMA( nextSegPos, ( width * 0.5f ), vNormal, vPoint1 );
-		VectorMA( nextSegPos, ( -width * 0.5f ), vNormal, vPoint2 );
+		VectorMA( nextSegPos, width, vNormal, vPoint1 );
+		VectorMA( nextSegPos, -width, vNormal, vPoint2 );
 
 		R_UI_TriBrightness( 1.0f );
 		R_UI_TriTexCoord2f( 0.0f, vLast );
@@ -1078,6 +1105,22 @@ void R_BeamDraw( BEAM *pbeam, float frametime )
 	int frameIdx = (int)( pbeam->frame + pbeam->frameRate * curtime ) % ( pbeam->frameCount ? pbeam->frameCount : 1 );
 	if( !R_UI_TriSpriteTexture( model, frameIdx ) )
 		return;
+
+	if( rt_sprite_debug && rt_sprite_debug->value > 0.0f )
+	{
+		static uint32_t seen[64];
+		static int numSeen;
+		const uint32_t key = R_SpriteDebugHash( model->name ) ^ (uint32_t)( pbeam->type << 4 ) ^ (uint32_t)( pbeam->flags << 12 ) ^ (uint32_t)( pbeam->width * 10.0f ) * 2654435761u ^ (uint32_t)( pbeam->amplitude * 100.0f ) * 40503u;
+		qboolean found = false;
+		for( int i = 0; i < numSeen; i++ )
+			found = found || seen[i] == key;
+		if( !found && numSeen < 64 )
+		{
+			seen[numSeen++] = key;
+			gEngfuncs.Con_Printf( "beam %s type %d flags 0x%x width %.1f amp %.2f segs %d bright %.2f rgb %.2f %.2f %.2f len %.0f\n", model->name, pbeam->type, pbeam->flags,
+			                      pbeam->width, pbeam->amplitude, (int)pbeam->segments, brightness, pbeam->r, pbeam->g, pbeam->b, VectorLength( delta ));
+		}
+	}
 
 	R_UI_TriFxBoost( rt_beam_emis ? rt_beam_emis->value : 4.0f );
 
