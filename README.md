@@ -73,6 +73,8 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_debug` | 0 | Print what the renderer draws and changes (sprites, light style changes) to the console |
 | `rt_glow_sprites` | 0 | Draw the glare sprites that fake bloom on lights (they grow with distance) |
 | `rt_tracer_emis` | 6 | Glow of sparks and tracers, relative to `rt_fx_emis` |
+| `rt_beam_emis` | 4 | Glow of beams (gluon gun, lasers, lightning, trails), relative to `rt_fx_emis` |
+| `rt_entity_lights` | 0 | Rockets and hornets (EF_LIGHT) light the scene with the engine's dynamic lights |
 | `rt_liquid_emis` | 1 | Glow of glowing liquids such as toxic waste |
 | `rt_light_e` | 5000 | Light from entity lights (alien controller orbs, Nihilanth's spheres) |
 | `rt_emis` | 1 | Glow of light fixtures and screens |

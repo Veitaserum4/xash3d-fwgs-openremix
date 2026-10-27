@@ -246,6 +246,7 @@ static cvar_t *rt_flsh_u           = NULL;
 static cvar_t *rt_light_s          = NULL;
 static cvar_t *rt_light_d          = NULL;
 static cvar_t *rt_light_e          = NULL;
+static cvar_t *rt_entity_lights    = NULL;
 static cvar_t *rt_light_radius     = NULL;
 static cvar_t *rt_light_range      = NULL;
 static cvar_t *rt_emis             = NULL;
@@ -308,6 +309,7 @@ void R_Lights_Init( void )
 		rt_flsh_u          = gEngfuncs.Cvar_Get( "rt_flsh_u", "-2.5", FCVAR_ARCHIVE, "Player flashlight up offset" );
 		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "500", FCVAR_ARCHIVE, "Map static light intensity scale" );
 		rt_light_d         = gEngfuncs.Cvar_Get( "rt_light_d", "1000", FCVAR_ARCHIVE, "Dynamic lights (explosions/projectiles) intensity scale" );
+		rt_entity_lights   = gEngfuncs.Cvar_Get( "rt_entity_lights", "0", FCVAR_ARCHIVE, "Rockets and hornets (entities with EF_LIGHT) light the scene as the original engine's dynamic lights" );
 		rt_light_e         = gEngfuncs.Cvar_Get( "rt_light_e", "5000", FCVAR_ARCHIVE, "Entity lights (controller orbs, Nihilanth's spheres) intensity" );
 		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
 		rt_light_range     = gEngfuncs.Cvar_Get( "rt_light_range", "0", FCVAR_ARCHIVE, "Local light cutoff range (0 = unlimited physical falloff)" );
@@ -1035,6 +1037,14 @@ void R_Lights_DrawFrame( void )
 				R_Lights_SubmitFlashlight();
 				flashlight_drawn = true;
 				continue;
+			}
+
+			// A rocket's or a hornet's own dlight (EF_LIGHT): its glow is its flare's
+			if( l->key > 0 && !( rt_entity_lights && rt_entity_lights->value > 0.0f ))
+			{
+				const cl_entity_t *owner = CL_GetEntityByIndex( l->key );
+				if( owner && FBitSet( owner->curstate.effects, EF_LIGHT ) && !FBitSet( owner->curstate.effects, EF_BRIGHTLIGHT | EF_DIMLIGHT ))
+					continue;
 			}
 
 			R_Lights_SubmitPointDlight( l, i, d_scale, false );

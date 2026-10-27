@@ -98,11 +98,13 @@ remixapi_MaterialHandle R_GetSpriteMaterial( int texnum )
 static cvar_t *rt_tracer_emis = NULL;
 static cvar_t *rt_glow_sprites = NULL;
 static cvar_t *rt_sprite_debug = NULL;
+static cvar_t *rt_beam_emis    = NULL;
 
 void R_Sprite_Init( void )
 {
 	rt_sprite_debug = gEngfuncs.Cvar_Get( "rt_debug", "0", 0, "Print what the renderer draws and changes: each kind of sprite (model, render mode, effects, scale), light style changes" );
 	rt_glow_sprites = gEngfuncs.Cvar_Get( "rt_glow_sprites", "0", FCVAR_ARCHIVE, "Draw the glare sprites that fake bloom on lights (they grow with distance)" );
+	rt_beam_emis   = gEngfuncs.Cvar_Get( "rt_beam_emis", "4", FCVAR_ARCHIVE, "Glow of beams (gluon gun, lasers, lightning, trails), relative to other additive effects (rt_fx_emis)" );
 	rt_tracer_emis = gEngfuncs.Cvar_Get( "rt_tracer_emis", "6", FCVAR_ARCHIVE, "Glow of sparks and tracers, relative to other additive effects (rt_fx_emis)" );
 
 	if( !g_remix.CreateMesh )
@@ -967,6 +969,8 @@ void R_BeamDraw( BEAM *pbeam, float frametime )
 	if( !R_UI_TriSpriteTexture( model, frameIdx ) )
 		return;
 
+	R_UI_TriFxBoost( rt_beam_emis ? rt_beam_emis->value : 4.0f );
+
 	switch( pbeam->type )
 	{
 	case TE_BEAMDISK:
@@ -1001,6 +1005,8 @@ void R_BeamDraw( BEAM *pbeam, float frametime )
 		            pbeam->r, pbeam->g, pbeam->b, brightness );
 		break;
 	}
+
+	R_UI_TriFxBoost( 1.0f );
 }
 
 /*
