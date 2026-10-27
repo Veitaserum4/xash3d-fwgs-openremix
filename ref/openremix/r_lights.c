@@ -309,7 +309,7 @@ void R_Lights_Init( void )
 		rt_flsh_u          = gEngfuncs.Cvar_Get( "rt_flsh_u", "-2.5", FCVAR_ARCHIVE, "Player flashlight up offset" );
 		rt_light_s         = gEngfuncs.Cvar_Get( "rt_light_s", "500", FCVAR_ARCHIVE, "Map static light intensity scale" );
 		rt_light_d         = gEngfuncs.Cvar_Get( "rt_light_d", "1000", FCVAR_ARCHIVE, "Dynamic lights (explosions/projectiles) intensity scale" );
-		rt_beam_light      = gEngfuncs.Cvar_Get( "rt_beam_light", "600", FCVAR_ARCHIVE, "How strongly beams (gluon gun, lasers, lightning) light their surroundings; 0: they only glow" );
+		rt_beam_light      = gEngfuncs.Cvar_Get( "rt_beam_light", "4000", FCVAR_ARCHIVE, "How strongly beams (gluon gun, lasers, lightning) light their surroundings; 0: they only glow" );
 		rt_light_e         = gEngfuncs.Cvar_Get( "rt_light_e", "5000", FCVAR_ARCHIVE, "Entity lights (controller orbs, Nihilanth's spheres) intensity" );
 		rt_light_radius    = gEngfuncs.Cvar_Get( "rt_light_radius", "3.0", FCVAR_ARCHIVE, "Map static light source radius in GoldSrc units" );
 		rt_light_range     = gEngfuncs.Cvar_Get( "rt_light_range", "0", FCVAR_ARCHIVE, "Local light cutoff range (0 = unlimited physical falloff)" );
@@ -989,27 +989,38 @@ A beam's glow alone lights little: a few point lights along it carry its light. 
 last slots of the dynamic lights
 ====================
 */
-#define R_MAX_BEAM_LIGHTS 16
+#define R_MAX_BEAM_LIGHTS 32
 static struct { vec3_t origin; vec3_t radiance; } s_beamLights[R_MAX_BEAM_LIGHTS];
 static int s_numBeamLights;
 
 void R_Lights_AddBeamLight( const vec3_t start, const vec3_t end, float r, float g, float b, float brightness )
 {
-	const float strength = rt_beam_light ? rt_beam_light->value : 600.0f;
+	const float strength = rt_beam_light ? rt_beam_light->value : 4000.0f;
 	if( strength <= 0.0f || brightness <= 0.0f )
 		return;
 
 	vec3_t delta;
 	VectorSubtract( end, start, delta );
-	int count = (int)( VectorLength( delta ) / 160.0f ) + 1;
-	count = bound( 1, count, 4 );
+	int count = (int)( VectorLength( delta ) / 64.0f ) + 1;
+	count = bound( 1, count, 8 );
 
-	// The light carried by the whole beam is shared by its lights
+	// The light carried along the beam is shared by its lights
 	const float scale = strength * brightness / (float)count;
 	for( int i = 0; i < count && s_numBeamLights < R_MAX_BEAM_LIGHTS; i++ )
 	{
 		VectorMA( start, ( (float)i + 0.5f ) / (float)count, delta, s_beamLights[s_numBeamLights].origin );
 		VectorSet( s_beamLights[s_numBeamLights].radiance, r * scale, g * scale, b * scale );
+		s_numBeamLights++;
+	}
+
+	// Where it ends (a beam striking a wall) it lights the surface it hits
+	if( s_numBeamLights < R_MAX_BEAM_LIGHTS )
+	{
+		// A little back along the beam so the light stands off the surface
+		vec3_t dir;
+		VectorNormalize2( delta, dir );
+		VectorMA( end, -4.0f, dir, s_beamLights[s_numBeamLights].origin );
+		VectorSet( s_beamLights[s_numBeamLights].radiance, r * strength * brightness * 0.5f, g * strength * brightness * 0.5f, b * strength * brightness * 0.5f );
 		s_numBeamLights++;
 	}
 }
