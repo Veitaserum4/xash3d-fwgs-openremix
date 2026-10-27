@@ -101,6 +101,10 @@ static uint32_t fs_mounted_flags = 0;
 
 void FS_Rescan_f( void )
 {
+	// Models already loaded came from the old content: the next level loads them all again
+	if( FS_MountFlags() != fs_mounted_flags )
+		Mod_ReloadAllNextLevel();
+
 	fs_mounted_flags = FS_MountFlags();
 	g_fsapi.Rescan( fs_mounted_flags, ui_language.string );
 }
@@ -109,10 +113,7 @@ void FS_Rescan_f( void )
 void FS_RescanIfMountChanged( void )
 {
 	if( FS_MountFlags() != fs_mounted_flags )
-	{
 		FS_Rescan_f();
-		Mod_ReloadAllNextLevel(); // models already loaded came from the old content
-	}
 }
 
 static void FS_LoadVFSConfig( const char *gamedir )
