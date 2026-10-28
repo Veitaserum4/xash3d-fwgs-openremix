@@ -1035,7 +1035,8 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	entry->width         = width;
 	entry->height        = height;
 	entry->flags         = flags;
-	entry->isCutout      = ( baseName[0] == '{' );
+	// Decals are named with a '{' too, but their alpha is a gradient (scorch marks, blood edges)
+	entry->isCutout      = ( baseName[0] == '{' ) && !FBitSet( flags, TF_DECAL );
 	// Map textures ("...name.mip") only: the engine's built-in textures are named with a '*' too
 	// ("*particle", "*white"), and as water they lost their image
 	const size_t nameLength = Q_strlen( name );

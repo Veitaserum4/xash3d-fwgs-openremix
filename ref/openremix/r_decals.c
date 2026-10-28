@@ -33,8 +33,12 @@
 #define BOTTOM_EDGE 3
 
 // How far a decal's mesh stands off its surface (units): the path tracer resolves the decal
-// against the surface below, this only keeps their triangles apart
-#define DECAL_SURFACE_OFFSET 0.1f
+// against the surface below, this only keeps their triangles apart. It peels the paint over a
+// surface front to back by distance, so decals stacked on one surface each stand a step further
+// out than the one below (two at one distance would show only one)
+#define DECAL_SURFACE_OFFSET 0.05f
+#define DECAL_LAYER_STEP     0.02f
+#define DECAL_MAX_LAYERS     16
 
 typedef struct
 {
@@ -911,12 +915,18 @@ static remixapi_MeshHandle R_Decals_BuildMesh( const model_t *mod, uint64_t hash
 		vec3_t normal;
 		R_DecalSurfaceNormal( d->psurface, normal );
 
+		// Its place in the surface's stack (older decals first)
+		int layer = 0;
+		for( const decal_t *below = d->psurface->pdecals; below && below != d && layer < DECAL_MAX_LAYERS - 1; below = below->pnext )
+			layer++;
+		const float offset = DECAL_SURFACE_OFFSET + DECAL_LAYER_STEP * layer;
+
 		const uint32_t base = bucket->numVerts;
 		for( uint32_t k = 0; k < n; k++ )
 		{
 			remixapi_HardcodedVertex *v = &bucket->verts[bucket->numVerts++];
 			memset( v, 0, sizeof( *v ));
-			VectorMA( poly->verts[k], DECAL_SURFACE_OFFSET, normal, v->position );
+			VectorMA( poly->verts[k], offset, normal, v->position );
 			VectorCopy( normal, v->normal );
 			v->texcoord[0] = poly->verts[k][3];
 			v->texcoord[1] = poly->verts[k][4];
