@@ -9,6 +9,7 @@
 #include "entity_types.h"
 #include "r_sprite.h"
 #include "r_textures.h"
+#include "r_decals.h"
 
 bsp_state_t g_bspState;
 
@@ -789,6 +790,7 @@ void R_BSP_DrawWorld( void )
 	instance.doubleSided   = 1;
 
 	remixapi_ErrorCode err = g_remix.DrawInstance( &instance );
+	R_Decals_DrawModel( tr.worldmodel, &identityTransform, identityExt.instanceId, true );
 	if( err != REMIXAPI_ERROR_CODE_SUCCESS )
 	{
 		static int s_worldDrawErrors = 0;
@@ -998,6 +1000,9 @@ void R_BSP_DrawBrushEntity( cl_entity_t *ent )
 	instance.doubleSided   = 1;
 
 	remixapi_ErrorCode err = g_remix.DrawInstance( &instance );
+	// Decals on solid and cutout brushes (doors, walls, breakables), as the GL renderer's
+	if( !isAdditive && !isGlass && !isWater )
+		R_Decals_DrawModel( ent->model, &transform, entityInstanceId, false );
 	if( err != REMIXAPI_ERROR_CODE_SUCCESS )
 	{
 		static int s_brushDrawErrors = 0;

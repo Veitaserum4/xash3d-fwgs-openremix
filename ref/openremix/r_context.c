@@ -7,6 +7,7 @@
 #include "r_textures.h"
 #include "r_ui.h"
 #include "r_sky.h"
+#include "r_decals.h"
 
 // Cached engine globals
 ref_api_t          gEngfuncs;
@@ -126,31 +127,6 @@ static colorVec R_LightPoint_Stub( const float *p )
 	return c;
 }
 
-static void R_DecalShoot_Stub( int textureIndex, int entityIndex, int modelIndex, vec3_t pos, int flags, float scale )
-{
-	(void)textureIndex;
-	(void)entityIndex;
-	(void)modelIndex;
-	(void)pos;
-	(void)flags;
-	(void)scale;
-}
-
-static void R_DecalRemoveAll_Stub( int texture )
-{
-	(void)texture;
-}
-
-static int R_CreateDecalList_Stub( struct decallist_s *pList )
-{
-	(void)pList;
-	return 0;
-}
-
-static void R_ClearAllDecals_Stub( qboolean includePermanent )
-{
-	(void)includePermanent;
-}
 
 
 static void GL_SubdivideSurface_Stub( model_t *mod, msurface_t *fa )
@@ -337,10 +313,10 @@ const ref_interface_t gReffuncs =
 	.VID_CubemapShot       = VID_CubemapShot_Stub,
 	.R_LightPoint          = R_LightPoint_Stub,
 
-	.R_DecalShoot          = R_DecalShoot_Stub,
-	.R_DecalRemoveAll      = R_DecalRemoveAll_Stub,
-	.R_CreateDecalList     = R_CreateDecalList_Stub,
-	.R_ClearAllDecals      = R_ClearAllDecals_Stub,
+	.R_DecalShoot          = R_DecalShoot,
+	.R_DecalRemoveAll      = R_DecalRemoveAll,
+	.R_CreateDecalList     = R_CreateDecalList,
+	.R_ClearAllDecals      = R_ClearAllDecals,
 
 	.R_StudioEstimateFrame = R_StudioEstimateFrame,
 	.R_StudioLerpMovement  = R_StudioLerpMovement,

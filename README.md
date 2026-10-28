@@ -75,6 +75,7 @@ Most settings are in the game menu under **Options → Video → Ray tracing**: 
 | `rt_tracer_emis` | 6 | Glow of sparks and tracers, relative to `rt_fx_emis` |
 | `rt_beam_emis` | 4 | Glow of beams (gluon gun, lasers, lightning, trails), relative to `rt_fx_emis` |
 | `rt_beam_light` | 4000 | How strongly beams (gluon gun, lasers, lightning) light their surroundings; 0: they only glow |
+| `rt_decals` | 1 | Draw decals (blood, bullet holes, scorch marks, sprays); `r_decals` sets how many |
 | `rt_liquid_emis` | 1 | Glow of glowing liquids such as toxic waste |
 | `rt_light_e` | 5000 | Light from entity lights (alien controller orbs, Nihilanth's spheres) |
 | `rt_emis` | 1 | Glow of light fixtures and screens |

@@ -13,6 +13,7 @@
 #include "r_lights.h"
 #include "r_xashrt.h"
 #include "r_sky.h"
+#include "r_decals.h"
 
 // Menu/loading warm-up: set when R_RenderScene ran this frame
 static qboolean s_sceneRendered = false;
@@ -296,6 +297,7 @@ qboolean R_Init( void )
 	R_StudioInit();
 	R_UI_Init();
 	R_Sprite_Init();
+	R_Decals_Init();
 	R_Lights_Init();
 	R_Sky_Init();
 
@@ -359,6 +361,7 @@ void R_NewMap( void )
 	R_BSP_NewMap( tr.worldmodel );
 	R_StudioNewMap();
 	R_Sprite_NewMap();
+	R_Decals_NewMap();
 	R_Lights_NewMap( tr.worldmodel ? tr.worldmodel->entities : NULL );
 	R_XRT_NewMap( tr.worldmodel );
 
