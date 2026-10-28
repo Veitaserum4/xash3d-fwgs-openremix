@@ -100,11 +100,22 @@ static cvar_t *rt_tracer_emis = NULL;
 static cvar_t *rt_glow_sprites = NULL;
 static cvar_t *rt_sprite_debug = NULL;
 static cvar_t *rt_beam_emis    = NULL;
+static cvar_t *rt_traced_effects = NULL;
+
+/*
+ * R_Sprite_TracedClass - How a coverage-blended or solid effect (sprite, particle, client
+ * triangles) is drawn: traced (lit, shadowed, reflected) or, with rt_traced_effects 0, raster
+ */
+int R_Sprite_TracedClass( void )
+{
+	return ( rt_traced_effects && rt_traced_effects->value <= 0.0f ) ? REMIXAPI_INSTANCE_RASTER_ONLY_EXT : REMIXAPI_INSTANCE_DYNAMIC_EXT;
+}
 
 void R_Sprite_Init( void )
 {
 	rt_sprite_debug = gEngfuncs.Cvar_Get( "rt_debug", "0", 0, "Print what the renderer draws and changes: each kind of sprite (model, render mode, effects, scale), light style changes" );
 	rt_glow_sprites = gEngfuncs.Cvar_Get( "rt_glow_sprites", "0", FCVAR_ARCHIVE, "Draw the glare sprites that fake bloom on lights (they grow with distance)" );
+	rt_traced_effects = gEngfuncs.Cvar_Get( "rt_traced_effects", "1", FCVAR_ARCHIVE, "Path trace smoke, particles and other non-additive effects (lit, shadowed, reflected); 0: drawn over the image" );
 	rt_beam_emis   = gEngfuncs.Cvar_Get( "rt_beam_emis", "4", FCVAR_ARCHIVE, "Glow of beams (gluon gun, lasers, lightning, trails), relative to other additive effects (rt_fx_emis)" );
 	rt_tracer_emis = gEngfuncs.Cvar_Get( "rt_tracer_emis", "6", FCVAR_ARCHIVE, "Glow of sparks and tracers, relative to other additive effects (rt_fx_emis)" );
 
@@ -528,6 +539,8 @@ void R_DrawSpriteModel( cl_entity_t *e )
 	if( !spriteInstId ) spriteInstId = 1ULL;
 
 	R_SetupSpriteBlendState( &blendExt, &identExt, &rasterState, spriteInstId, e->curstate.rendermode );
+	if( e->curstate.rendermode != kRenderTransAdd && e->curstate.rendermode != kRenderGlow )
+		identExt.classification = R_Sprite_TracedClass(); // lit, shadowed and reflected
 
 	// Setup sprite color tint & alpha from curstate
 	color24 c = e->curstate.rendercolor;
@@ -1409,6 +1422,7 @@ void CL_DrawParticles( double frametime, particle_t *particles, float partsize )
 		remixapi_InstanceInfoBlendEXT blendExt;
 		remixapi_InstanceIdentityEXT identExt;
 		R_SetupSpriteBlendState( &blendExt, &identExt, &rasterState, slot->hash, kRenderTransAlpha );
+		identExt.classification = R_Sprite_TracedClass(); // particles are lit, shadowed and reflected
 
 		remixapi_Transform identityTransform;
 		memset( &identityTransform, 0, sizeof( identityTransform ) );

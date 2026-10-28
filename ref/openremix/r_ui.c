@@ -942,6 +942,8 @@ void R_UI_TriFlush( void )
 		else
 		{
 			R_SetupSpriteBlendState( &blendExt, &identExt, &rasterState, slot->hash, mode );
+			if( mode != kRenderTransAdd && mode != kRenderGlow )
+				identExt.classification = R_Sprite_TracedClass(); // smoke and other coverage effects are traced
 		}
 
 		remixapi_Transform identityTransform;

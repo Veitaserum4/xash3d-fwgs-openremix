@@ -44,6 +44,7 @@ typedef struct dynamic_mesh_slot_s
 
 dynamic_mesh_slot_t    *R_AllocDynamicMeshSlot( void );
 remixapi_MaterialHandle R_GetSpriteMaterial( int texnum );
+int                     R_Sprite_TracedClass( void );
 void                    R_SetupSpriteBlendState( remixapi_InstanceInfoBlendEXT *pBlend,
                                                  remixapi_InstanceIdentityEXT *pIdent,
                                                  remixapi_InstanceRasterStateEXT *pRaster,
