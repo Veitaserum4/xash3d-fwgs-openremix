@@ -1012,6 +1012,24 @@ static qboolean R_Textures_CreateBrightMask( remix_texture_t *entry, const byte 
 /*
  * Upload RGBA pixel data to OpenRemix and construct Material
  */
+// A free texture slot, or 0 when every one is in use. Slots are reused once freed: a counter
+// that wrapped around overwrote textures still in use (the menu's, the view models') after
+// enough levels in one session
+static int R_Textures_AllocSlot( void )
+{
+	for( int tries = 1; tries < MAX_REMIX_TEXTURES; tries++ )
+	{
+		const int texnum = s_nextTexNum++;
+		if( s_nextTexNum >= MAX_REMIX_TEXTURES )
+			s_nextTexNum = 1;
+		if( !g_remixTextures[texnum].registered )
+			return texnum;
+	}
+
+	gEngfuncs.Con_Printf( S_ERROR "ref_openremix: out of texture slots (%d)\n", MAX_REMIX_TEXTURES );
+	return 0;
+}
+
 static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t height, const byte *rgbaData, uint32_t flags )
 {
 	if( !name || width == 0 || height == 0 || !rgbaData )
@@ -1023,9 +1041,9 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	if( existing > 0 && g_remixTextures[existing].matHandle && !rebuild )
 		return existing;
 
-	int texnum = existing > 0 ? existing : s_nextTexNum++;
-	if( s_nextTexNum >= MAX_REMIX_TEXTURES )
-		s_nextTexNum = 1;
+	int texnum = existing > 0 ? existing : R_Textures_AllocSlot();
+	if( !texnum )
+		return 0;
 
 	char baseName[64];
 	R_Textures_GetBaseName( name, baseName, sizeof( baseName ) );
