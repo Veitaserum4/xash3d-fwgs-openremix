@@ -182,7 +182,7 @@ qboolean R_AutoPBR_Classify( const char *baseName, qboolean studio, float *metal
 }
 
 qboolean R_AutoPBR_CreateNormalMap( const byte *rgba, uint32_t width, uint32_t height, uint64_t hash,
-                                    remixapi_TextureHandle *handle, wchar_t *path, size_t pathLen )
+                                    remixapi_TextureHandle *handle, rpathchar_t *path, size_t pathLen )
 {
 	const float strength = rt_autopbr_normals ? rt_autopbr_normals->value : 1.0f;
 	if( strength <= 0.0f || !rgba || width < 4 || height < 4 || !g_remix.CreateTexture )
@@ -249,6 +249,6 @@ qboolean R_AutoPBR_CreateNormalMap( const byte *rgba, uint32_t width, uint32_t h
 		*handle = NULL;
 		return false;
 	}
-	_snwprintf( path, pathLen, L"0x%llx", (unsigned long long)hash );
+	R_PathPrintf( path, pathLen, RPATH( "0x%llx" ), (unsigned long long)hash );
 	return true;
 }

@@ -458,6 +458,10 @@ qboolean R_Init_Video( ref_graphic_apis_t type )
 	case REF_SOFTWARE:
 		glw_state.software = true;
 		break;
+	case REF_EXTERNAL_WINDOW:
+		glw_state.software = true;
+		glw_state.external = true;
+		break;
 	case REF_GL:
 	{
 		string safe;
@@ -486,6 +490,7 @@ qboolean R_Init_Video( ref_graphic_apis_t type )
 	{
 	case REF_SOFTWARE:
 	case REF_D3D:
+	case REF_EXTERNAL_WINDOW:
 		break;
 	case REF_GL:
 		ref.dllFuncs.GL_InitExtensions();
@@ -507,11 +512,11 @@ void R_Free_Video( void )
 		glw_state.context = NULL;
 	}
 
-	if( host.hWnd )
-	{
+	// the renderer destroys its own window
+	if( host.hWnd && !glw_state.external )
 		SDL_DestroyWindow( host.hWnd );
-		host.hWnd = NULL;
-	}
+	host.hWnd = NULL;
+	glw_state.external = false;
 
 	refState.window_mode = WINDOW_MODE_WINDOWED;
 
@@ -1062,11 +1067,44 @@ static rserr_t VID_SetScreenResolution( int width, int height, window_mode_t win
 	return rserr_ok;
 }
 
+static qboolean VID_AdoptWindow( void )
+{
+	int count = 0;
+	SDL_Window **windows = SDL_GetWindows( &count );
+
+	if( windows && count > 0 )
+		host.hWnd = windows[0];
+	SDL_free( windows );
+
+	if( !host.hWnd )
+	{
+		Con_Printf( S_ERROR "%s: the renderer has not created a window\n", __func__ );
+		return false;
+	}
+
+	SDL_SetWindowTitle( host.hWnd, GI->title );
+	SDL_SetWindowMinimumSize( host.hWnd, VID_MIN_WIDTH, VID_MIN_HEIGHT );
+	VID_SetWindowIcon( host.hWnd );
+	return true;
+}
+
 rserr_t R_ChangeDisplaySettings( int width, int height, window_mode_t window_mode )
 {
 	rserr_t err;
 
-	if( !host.hWnd )
+	if( !host.hWnd && glw_state.external )
+	{
+		// take over the renderer's window, then size it like an existing one
+		if( !VID_AdoptWindow( ))
+			return rserr_invalid_mode;
+
+		err = VID_SetScreenResolution( width, height, window_mode, WINDOW_MODE_WINDOWED );
+		if( err != rserr_ok )
+			return err;
+
+		VID_Info_f();
+	}
+	else if( !host.hWnd )
 	{
 		// create window if not exists
 		if( !VID_CreateWindow( width, height, window_mode ))

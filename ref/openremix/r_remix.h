@@ -15,11 +15,11 @@ extern "C" {
 
 typedef struct ref_remix_state_s
 {
-	HMODULE            hRemixDll;
+	remixapi_HMODULE   hRemixDll;
 	qboolean           isLoaded;
 	qboolean           isStarted;
-	wchar_t            dllPath[MAX_PATH];
-	wchar_t            dllDir[MAX_PATH];
+	rpathchar_t        dllPath[MAX_PATH];
+	rpathchar_t        dllDir[MAX_PATH];
 	uint64_t           apiVersion;
 	char               lastError[512];
 } ref_remix_state_t;
@@ -36,6 +36,10 @@ qboolean    R_Remix_IsStarted( void );
 const char *R_Remix_GetErrorString( remixapi_ErrorCode errorCode );
 void        R_Remix_ToggleUI( void );
 void        R_Remix_UpdateCursorClipping( void );
+qboolean    R_Remix_RouteInput( void );
+#if !defined( _WIN32 )
+qboolean    R_ExeDirectory( char *out, size_t size );
+#endif
 
 // Compatibility aliases
 qboolean    Remix_LoadAndInitialize( const char *custom_path );

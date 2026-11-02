@@ -64,7 +64,7 @@ static struct
 static cvar_t *rt_flsh_cookie = NULL;
 static struct
 {
-	wchar_t                path[512]; // what the light names: a file, or the built-in texture's hash
+	rpathchar_t            path[512]; // what the light names: a file, or the built-in texture's hash
 	remixapi_TextureHandle builtin;
 	qboolean               ready;
 } s_flashlightCookie;
@@ -184,13 +184,29 @@ static qboolean R_Lights_GetFlashlightCookie( remixapi_LightInfoCookieEXT *ext )
 				gEngfuncs.Con_Printf( "ref_openremix: flashlight cookie rt/cookies/%s\n", files[i] );
 			}
 		}
+#else
+		static const char *const files[] = { "flashlight.png", "flashlight.tga", "flashlight.jpg", "flashlight.bmp", "flashlight.dds" };
+		char exe[MAX_PATH];
+		qboolean haveExe = R_ExeDirectory( exe, sizeof( exe ));
+		for( size_t i = 0; haveExe && i < ARRAYSIZE( files ) && !s_flashlightCookie.path[0]; i++ )
+		{
+			char full[MAX_PATH];
+			Q_snprintf( full, sizeof( full ), "%s/rt/cookies/%s", exe, files[i] );
+			FILE *f = fopen( full, "rb" );
+			if( f )
+			{
+				fclose( f );
+				Q_strncpy( s_flashlightCookie.path, full, sizeof( s_flashlightCookie.path ));
+				gEngfuncs.Con_Printf( "ref_openremix: flashlight cookie rt/cookies/%s\n", files[i] );
+			}
+		}
 #endif
 		if( !s_flashlightCookie.path[0] )
 		{
 			const uint64_t hash = 0x464C53484B4F4F43ULL; // "FLSHKOOC"
 			s_flashlightCookie.builtin = R_Lights_BuildFlashlightCookie( hash );
 			if( s_flashlightCookie.builtin )
-				_snwprintf( s_flashlightCookie.path, ARRAYSIZE( s_flashlightCookie.path ), L"0x%llx", (unsigned long long)hash );
+				R_PathPrintf( s_flashlightCookie.path, ARRAYSIZE( s_flashlightCookie.path ), RPATH( "0x%llx" ), (unsigned long long)hash );
 		}
 	}
 	if( !s_flashlightCookie.path[0] )

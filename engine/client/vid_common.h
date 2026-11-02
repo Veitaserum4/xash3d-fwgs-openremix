@@ -29,6 +29,7 @@ typedef struct
 	void     *context; // handle to GL rendering context
 	ref_safegl_context_t safe;
 	qboolean software;
+	qboolean external; // host.hWnd belongs to the renderer
 } glwstate_t;
 
 extern glwstate_t glw_state;

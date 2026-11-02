@@ -21,6 +21,20 @@
 #include "remix/remix_c.h"
 #include "remix/remix_native_ext.h"
 
+// remixapi_Path is UTF-16 on Windows, UTF-8 elsewhere
+#if defined( _WIN32 )
+typedef wchar_t rpathchar_t;
+#define RPATH( s ) L##s
+#define R_PathPrintf R_PathPrintf
+#else
+typedef char rpathchar_t;
+#define RPATH( s ) s
+#define R_PathPrintf snprintf
+#ifndef MAX_PATH
+#define MAX_PATH 4096
+#endif
+#endif
+
 // Xash3D engine headers
 #include "xash3d_types.h"
 #include "const.h"

@@ -14,6 +14,9 @@
 #include "r_xashrt.h"
 #include "r_sky.h"
 #include "r_decals.h"
+#if !defined( _WIN32 )
+#include <glob.h>
+#endif
 
 // Menu/loading warm-up: set when R_RenderScene ran this frame
 static qboolean s_sceneRendered = false;
@@ -87,7 +90,10 @@ static qboolean R_Settings_ProfileSaved( void )
 	FindClose( handle );
 	return true;
 #else
-	return false;
+	glob_t found;
+	qboolean saved = glob( pattern, 0, NULL, &found ) == 0 && found.gl_pathc > 0;
+	globfree( &found );
+	return saved;
 #endif
 }
 
@@ -215,6 +221,9 @@ qboolean R_Init( void )
 		return false;
 	}
 
+	const char *custom_path = ( gEngfuncs.pfnGetCvarString ) ? gEngfuncs.pfnGetCvarString( "r_openremix_path" ) : "";
+
+#if defined( _WIN32 )
 	// 1. Create native window via engine video subsystem in software mode (clean window surface, no GL/WGL context)
 	if( !gEngfuncs.R_Init_Video( REF_SOFTWARE ) )
 	{
@@ -235,7 +244,6 @@ qboolean R_Init( void )
 	}
 
 	// 3. Dynamically load remix.dll and initialize Remix C API dispatch table
-	const char *custom_path = ( gEngfuncs.pfnGetCvarString ) ? gEngfuncs.pfnGetCvarString( "r_openremix_path" ) : "";
 	if( !Remix_LoadAndInitialize( custom_path ) )
 	{
 		gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: Failed to load and initialize remix.dll\n" );
@@ -253,6 +261,34 @@ qboolean R_Init( void )
 		Mem_FreePool( &r_temppool );
 		return false;
 	}
+#else
+	// 1. Load libremix.so; it shares the engine's SDL3
+	void *hwnd = NULL;
+	if( !Remix_LoadAndInitialize( custom_path ) )
+	{
+		gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: Failed to load and initialize libremix.so\n" );
+		Mem_FreePool( &r_temppool );
+		return false;
+	}
+
+	// 2. Start OpenRemix, which opens its own window
+	if( !R_Remix_Startup( NULL ) )
+	{
+		gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: Failed to startup OpenRemix runtime\n" );
+		Remix_ShutdownAndUnload();
+		Mem_FreePool( &r_temppool );
+		return false;
+	}
+
+	// 3. The engine takes over that window: title, size, fullscreen, input
+	if( !gEngfuncs.R_Init_Video( REF_EXTERNAL_WINDOW ) )
+	{
+		gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: R_Init_Video failed\n" );
+		Remix_ShutdownAndUnload();
+		Mem_FreePool( &r_temppool );
+		return false;
+	}
+#endif
 
 	// 5. Configure global path tracer coordinates and units
 	if( g_remix.SetConfigVariable )
@@ -331,6 +367,11 @@ void R_Shutdown( void )
 	R_Sky_Shutdown();
 	R_Textures_Shutdown();
 
+#if !defined( _WIN32 )
+	// The window is OpenRemix's: the engine lets go of it before OpenRemix destroys it
+	gEngfuncs.R_Free_Video();
+#endif
+
 	// Shutdown Remix renderer
 	R_Remix_Shutdown();
 
@@ -339,7 +380,9 @@ void R_Shutdown( void )
 
 	// Free memory pool and video subsystem
 	Mem_FreePool( &r_temppool );
+#if defined( _WIN32 )
 	gEngfuncs.R_Free_Video();
+#endif
 
 	memset( &tr, 0, sizeof( tr ) );
 	tr.initialized = false;
@@ -382,7 +425,7 @@ void R_BeginFrame( qboolean clearScene )
 		return;
 
 	// Pump OpenRemix platform events (handles SDL3 input, window messages, ImGui event processing)
-	if( g_remix.PumpEvents )
+	if( R_Remix_RouteInput() && g_remix.PumpEvents )
 	{
 		g_remix.PumpEvents();
 	}
@@ -870,7 +913,9 @@ void R_EndFrame( void )
 	{
 		remixapi_PresentInfo presentInfo = { 0 };
 		presentInfo.sType        = REMIXAPI_STRUCT_TYPE_PRESENT_INFO;
+#if defined( _WIN32 )
 		presentInfo.hwndOverride = NULL;
+#endif
 
 		remixapi_ErrorCode err = g_remix.Present( &presentInfo );
 		if( err != REMIXAPI_ERROR_CODE_SUCCESS )

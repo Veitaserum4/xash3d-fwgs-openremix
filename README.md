@@ -15,7 +15,7 @@ This fork adds `ref_openremix`, a path-traced renderer for Half-Life built on [O
 
 ## Requirements
 
-- Windows 10/11, x64.
+- Windows 10/11 or Linux, x64.
 - A GPU with hardware ray tracing. DLSS and frame generation need a compatible NVIDIA GPU.
 - Half-Life from Steam (the `valve` folder).
 - 64-bit game libraries: Steam's `hl.dll`/`client.dll` are 32-bit, so build [hlsdk-portable](https://github.com/FWGS/hlsdk-portable) for x64.
@@ -37,6 +37,18 @@ waf install --destdir=<game folder>
 ```
 
 `-8` builds 64-bit, which OpenRemix requires. Instead of `--openremix-include`, you can set the `OPENREMIX_INCLUDE` environment variable, or keep the OpenRemix checkout next to this repository as `OpenRemix`. Never use GitHub's ZIP downloads: they leave out the submodules.
+
+### Linux
+
+Build OpenRemix natively (see its README: `meson setup` / `meson compile`, with the system SDL3). Then build the engine with SDL3, which the renderer requires on Linux:
+
+```
+./waf configure -8 --use-sdl3 --enable-ref-openremix --openremix-include=<OpenRemix>/public/include
+./waf build
+./waf install --destdir=<game folder>
+```
+
+On Linux, OpenRemix opens its own window and the engine takes it over, so both must use the same `libSDL3.so.0`. Point the renderer at `libremix.so` with `r_remix_path` or `REMIX_PATH`, or put it on `LD_LIBRARY_PATH`. Put 64-bit hlsdk-portable libraries in `valve/cl_dlls` and `valve/dlls`, then run `./xash3d -ref openremix -game valve`.
 
 ## Setting up the game folder
 

@@ -3,7 +3,6 @@
 # ref_openremix build script for Xash3D FWGS
 
 import os
-from waflib import Logs
 
 top = '.'
 
@@ -17,9 +16,13 @@ def configure(conf):
 	if conf.env.DEST_CPU != 'x86_64':
 		conf.fatal('ref_openremix requires a 64-bit target CPU (x86_64/amd64). Configure with -8 or --64bits.')
 
-	# 2. Platform Check: Windows is primary target
+	# 2. Platform Check: outside Windows, OpenRemix opens its own SDL3 window and the engine
+	# takes it over, so the engine must be on the same SDL3
+	if conf.env.DEST_OS != 'win32' and not conf.options.SDL3:
+		conf.fatal('ref_openremix needs the engine built with SDL3 outside Windows. Configure with --use-sdl3.')
 	if conf.env.DEST_OS != 'win32':
-		Logs.warn('ref_openremix is primarily supported on Windows; non-Windows targets may require Vulkan swapchain extensions.')
+		# for the event filter that routes input to the OpenRemix overlay
+		conf.check_cfg(package='sdl3', args='--cflags --libs', uselib_store='SDL3')
 
 	# 3. Locate OpenRemix include path
 	openremix_inc = conf.options.OPENREMIX_INCLUDE or os.environ.get('OPENREMIX_INCLUDE')
@@ -56,17 +59,19 @@ def build(bld):
 	# - werror: strict compilation flags
 	# - yy_thunks: Windows CRT compatibility thunks
 	# - USER32, GDI32: Win32 HWND presentation and window sizing
+	# - DL: dlopen for libremix.so elsewhere
 	# - M: math library
 	libs = [
 		'public',
 		'engine_includes',
 		'sdk_includes',
 		'werror',
-		'yy_thunks',
-		'USER32',
-		'GDI32',
 		'M'
 	]
+	if bld.env.DEST_OS == 'win32':
+		libs += ['yy_thunks', 'USER32', 'GDI32']
+	else:
+		libs += ['DL', 'SDL3']
 
 	bld.shlib(
 		source       = source,
