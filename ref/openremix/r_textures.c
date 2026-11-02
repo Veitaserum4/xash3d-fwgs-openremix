@@ -123,8 +123,8 @@ static void R_Textures_CreateDefaultMaterial( void )
 		gEngfuncs.Con_Reportf( S_ERROR "ref_openremix: Default CreateTexture failed: %u\n", (unsigned)tErr );
 	}
 
-	wchar_t hashStr[32];
-	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)texHash );
+	rpathchar_t hashStr[32];
+	R_PathPrintf( hashStr, sizeof( hashStr ) / sizeof( rpathchar_t ), RPATH( "0x%llx" ), (unsigned long long)texHash );
 
 	remixapi_MaterialInfoOpaqueEXT opaqueExt;
 	memset( &opaqueExt, 0, sizeof( opaqueExt ) );
@@ -688,8 +688,8 @@ static void R_Textures_CreateFx( remix_texture_t *entry, const char *name, uint3
 		return;
 	}
 
-	wchar_t hashStr[32];
-	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)fxHash );
+	rpathchar_t hashStr[32];
+	R_PathPrintf( hashStr, sizeof( hashStr ) / sizeof( rpathchar_t ), RPATH( "0x%llx" ), (unsigned long long)fxHash );
 
 	remixapi_MaterialInfoSelfIlluminationEXT selfExt;
 	memset( &selfExt, 0, sizeof( selfExt ) );
@@ -749,8 +749,8 @@ remixapi_MaterialHandle R_Textures_CreateSkyMaterial( unsigned int texnum, float
 		return NULL;
 
 	const remix_texture_t *entry = &g_remixTextures[texnum];
-	wchar_t hashStr[32];
-	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)entry->texHash );
+	rpathchar_t hashStr[32];
+	R_PathPrintf( hashStr, sizeof( hashStr ) / sizeof( rpathchar_t ), RPATH( "0x%llx" ), (unsigned long long)entry->texHash );
 
 	remixapi_MaterialInfoOpaqueEXT opaqueExt;
 	memset( &opaqueExt, 0, sizeof( opaqueExt ) );
@@ -808,8 +808,8 @@ remixapi_MaterialHandle R_Textures_GetFxMaterialScaled( unsigned int texnum, flo
 
 	// The same texture as the plain variant (R_Textures_CreateFx)
 	const uint64_t fxHash = entry->texHash ^ 0xF00DFACE0BEA0000ULL;
-	wchar_t hashStr[32];
-	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)fxHash );
+	rpathchar_t hashStr[32];
+	R_PathPrintf( hashStr, sizeof( hashStr ) / sizeof( rpathchar_t ), RPATH( "0x%llx" ), (unsigned long long)fxHash );
 
 	remixapi_MaterialInfoSelfIlluminationEXT selfExt;
 	memset( &selfExt, 0, sizeof( selfExt ) );
@@ -889,8 +889,8 @@ remixapi_MaterialHandle R_Textures_GetEmissiveMaterial( unsigned int texnum )
 	if( entry->emisMatHandle || !entry->texHandle || !g_remix.CreateMaterial )
 		return entry->emisMatHandle;
 
-	wchar_t hashStr[32];
-	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)entry->texHash );
+	rpathchar_t hashStr[32];
+	R_PathPrintf( hashStr, sizeof( hashStr ) / sizeof( rpathchar_t ), RPATH( "0x%llx" ), (unsigned long long)entry->texHash );
 
 	remixapi_MaterialInfoSelfIlluminationEXT selfExt;
 	memset( &selfExt, 0, sizeof( selfExt ) );
@@ -952,7 +952,7 @@ remixapi_MaterialHandle R_Textures_GetMaterial( unsigned int texnum )
  * content), fading to black below (fixture frames, bezels, the surrounding wall)
  */
 static qboolean R_Textures_CreateBrightMask( remix_texture_t *entry, const byte *rgba, uint32_t width, uint32_t height,
-                                             float strength, uint64_t hash, wchar_t *out, size_t outLen )
+                                             float strength, uint64_t hash, rpathchar_t *out, size_t outLen )
 {
 	if( !g_remix.CreateTexture || !rgba )
 		return false;
@@ -1005,7 +1005,7 @@ static qboolean R_Textures_CreateBrightMask( remix_texture_t *entry, const byte 
 	qboolean ok = g_remix.CreateTexture( &info, &entry->lumaTexHandle ) == REMIXAPI_ERROR_CODE_SUCCESS;
 	Mem_Free( mask );
 	if( ok )
-		_snwprintf( out, outLen, L"0x%llx", (unsigned long long)hash );
+		R_PathPrintf( out, outLen, RPATH( "0x%llx" ), (unsigned long long)hash );
 	return ok;
 }
 
@@ -1146,8 +1146,8 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		sanitizedBuffer = NULL;
 	}
 
-	wchar_t hashStr[32];
-	_snwprintf( hashStr, sizeof( hashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)texHash );
+	rpathchar_t hashStr[32];
+	R_PathPrintf( hashStr, sizeof( hashStr ) / sizeof( rpathchar_t ), RPATH( "0x%llx" ), (unsigned long long)texHash );
 
 	uint64_t matHash = texHash ^ 0x9E3779B97F4A7C15ULL;
 	entry->matHash   = matHash;
@@ -1170,7 +1170,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	remixapi_MaterialInfoTranslucentEXT waterExt;
 	remixapi_MaterialNormalEncodingEXT waterNormalEnc;
 	remixapi_MaterialNormalScrollEXT waterScroll;
-	wchar_t waterNormal[32];
+	rpathchar_t waterNormal[32];
 	qboolean hasWaterNormal = false;
 
 	if( waterBody )
@@ -1240,13 +1240,13 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 
 	// XashRT PBR maps: _orm packs roughness in green and metallic in blue (RayTracedGL1's
 	// NULL_ROUGHNESS_METALLIC swizzle); _n is a tangent-space (OpenGL convention) normal map
-	wchar_t xrtOrm[32], xrtNormal[32];
+	rpathchar_t xrtOrm[32], xrtNormal[32];
 	qboolean hasOrm    = !clearGlass && !waterBody && R_XRT_GetReplacementTexture( name, "_orm", xrtOrm, ARRAYSIZE( xrtOrm ) );
 	// Clear glass takes XashRT's normal map too: its bumps focus light into caustics
 	qboolean hasNormal = !waterBody && R_XRT_GetReplacementTexture( name, "_n", xrtNormal, ARRAYSIZE( xrtNormal ) );
 
 	// XashRT's replacement image for the texture
-	wchar_t xrtAlbedo[32];
+	rpathchar_t xrtAlbedo[32];
 	const qboolean hasXrtAlbedo = R_XRT_GetReplacementTexture( name, "", xrtAlbedo, ARRAYSIZE( xrtAlbedo ) );
 
 	// Studio textures (#<model>/<texture>.mdl) carry the model's texture flags; others carry TF_*.
@@ -1262,7 +1262,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 	// generated maps would not fit its image). USD mods replace the whole material by its hash
 	float autoMetallic = 0.0f, autoRoughness = 0.85f;
 	qboolean autoBumps = false, autoMaterial = false;
-	wchar_t autoNormal[32];
+	rpathchar_t autoNormal[32];
 	qboolean hasAutoNormal = false;
 	const qboolean autoPbr = R_AutoPBR_Enabled() && ( studioTexture || ( nameLen > 4 && !Q_stricmp( name + nameLen - 4, ".mip" ))) &&
 	                         !clearGlass && !waterBody && !entry->isGlass && !entry->isSky && !entry->isWater && !chrome && !hasXrtAlbedo;
@@ -1390,10 +1390,10 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		}
 	}
 
-	wchar_t maskHashStr[32];
+	rpathchar_t maskHashStr[32];
 
-	wchar_t xrtEmissive[32];
-	const wchar_t *albedoPath = hasXrtAlbedo ? xrtAlbedo : hashStr;
+	rpathchar_t xrtEmissive[32];
+	const rpathchar_t *albedoPath = hasXrtAlbedo ? xrtAlbedo : hashStr;
 
 	remixapi_MaterialInfo matInfo;
 	memset( &matInfo, 0, sizeof( matInfo ) );
@@ -1486,8 +1486,8 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 
 	// Optional PBR suffix detection: check for <name>_n, <name>_r, <name>_m, <name>_e
 	char pbrPath[128];
-	wchar_t normHashStr[32] = { 0 };
-	wchar_t emisHashStr[32] = { 0 };
+	rpathchar_t normHashStr[32] = { 0 };
+	rpathchar_t emisHashStr[32] = { 0 };
 
 	// Normal map check
 	Q_snprintf( pbrPath, sizeof( pbrPath ), "textures/%s_n.tga", name );
@@ -1505,7 +1505,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		if( pbrPic && pbrPic->buffer )
 		{
 			uint64_t normHash = R_HashString64( pbrPath );
-			_snwprintf( normHashStr, sizeof( normHashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)normHash );
+			R_PathPrintf( normHashStr, sizeof( normHashStr ) / sizeof( rpathchar_t ), RPATH( "0x%llx" ), (unsigned long long)normHash );
 
 			remixapi_TextureInfo normTexInfo = texInfo;
 			normTexInfo.hash     = normHash;
@@ -1539,7 +1539,7 @@ static int R_Textures_UploadRGBA( const char *name, uint32_t width, uint32_t hei
 		if( emisPic && emisPic->buffer )
 		{
 			uint64_t emisHash = R_HashString64( pbrPath );
-			_snwprintf( emisHashStr, sizeof( emisHashStr ) / sizeof( wchar_t ), L"0x%llx", (unsigned long long)emisHash );
+			R_PathPrintf( emisHashStr, sizeof( emisHashStr ) / sizeof( rpathchar_t ), RPATH( "0x%llx" ), (unsigned long long)emisHash );
 
 			remixapi_TextureInfo emisTexInfo = texInfo;
 			emisTexInfo.hash     = emisHash;

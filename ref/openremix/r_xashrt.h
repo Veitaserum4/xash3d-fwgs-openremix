@@ -32,11 +32,11 @@ void     R_XRT_Shutdown( void );
 qboolean R_XRT_Active( void );
 qboolean R_XRT_GetMaterial( const char *texname, xrt_material_t *out );
 // Loads rt/mat/<key><suffix>.ktx2 once and writes its Remix texture hash path ("0x...") to out
-qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, wchar_t *out, size_t outLen );
+qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, rpathchar_t *out, size_t outLen );
 // A file under rt/ (next to the executable), NUL-terminated; free() it. NULL if absent
 byte    *R_XRT_ReadFile( const char *path, size_t *outSize );
 // Loads any KTX2 under rt/ (e.g. "rt/WaterNormal_n.ktx2") once
-qboolean R_XRT_GetFileTexture( const char *path, wchar_t *out, size_t outLen );
+qboolean R_XRT_GetFileTexture( const char *path, rpathchar_t *out, size_t outLen );
 void     R_XRT_TextureKey( const char *texname, char *out, size_t outSize );
 
 // Per-map glTF scene (mirrors, added geometry, hand-placed lights)

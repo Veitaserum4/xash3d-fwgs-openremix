@@ -8,12 +8,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined( _WIN32 )
+#include <SDL3/SDL.h>
+#include <dlfcn.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 // Global dispatch table instance and loader state
 remixapi_Interface g_remix;
 ref_remix_state_t  g_remixState;
 
 static cvar_t *r_remix_path = NULL;
+
+#if defined( _WIN32 )
+#define RPATH_FMT "%ls"
+#define R_Remix_Symbol GetProcAddress
+#define R_Remix_Close  FreeLibrary
+#define R_Remix_PathCopy wcsncpy
 
 static const wchar_t *g_candidatePaths[] = {
 	// Game directory paths
@@ -28,6 +41,27 @@ static const wchar_t *g_candidatePaths[] = {
 
 	NULL
 };
+#else
+#define RPATH_FMT "%s"
+#define R_Remix_Symbol dlsym
+#define R_Remix_Close  dlclose
+#define R_Remix_PathCopy Q_strncpy
+
+static const char *g_candidatePaths[] = {
+	// Game directory paths
+	"libremix.so",
+	"bin/libremix.so",
+	"lib/libremix.so",
+	"ref/libremix.so",
+	"cl_dlls/libremix.so",
+
+	// An OpenRemix build tree next to the game folder
+	"../OpenRemix/_work/packages/linux/lib/libremix.so.0",
+	"../../OpenRemix/_work/packages/linux/lib/libremix.so.0",
+
+	NULL
+};
+#endif
 
 const char *R_Remix_GetErrorString( remixapi_ErrorCode errorCode )
 {
@@ -74,6 +108,7 @@ const char *R_Remix_GetErrorString( remixapi_ErrorCode errorCode )
 	}
 }
 
+#if defined( _WIN32 )
 static qboolean FileExistsW( const wchar_t *path )
 {
 	DWORD attrib = GetFileAttributesW( path );
@@ -207,28 +242,8 @@ Found:
 	return true;
 }
 
-qboolean R_Remix_LoadLibrary( void )
+static remixapi_HMODULE R_Remix_OpenLibrary( const wchar_t *dllPath, const wchar_t *dllDir )
 {
-	return Remix_LoadAndInitialize( NULL );
-}
-
-qboolean Remix_LoadAndInitialize( const char *custom_path )
-{
-	if( g_remixState.isLoaded )
-		return true;
-
-	wchar_t dllPath[MAX_PATH] = { 0 };
-	wchar_t dllDir[MAX_PATH] = { 0 };
-
-	if( !R_Remix_FindLibraryPath( custom_path, dllPath, MAX_PATH, dllDir, MAX_PATH ) )
-	{
-		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: Could not locate remix.dll!\n"
-		                      "Please set 'r_remix_path' or REMIX_PATH environment variable to remix.dll location.\n" );
-		return false;
-	}
-
-	gEngfuncs.Con_Printf( S_NOTE "ref_openremix: Found remix.dll at: %ls\n", dllPath );
-
 	// Save existing DLL directory to restore later
 	wchar_t savedDllDir[MAX_PATH] = { 0 };
 	GetDllDirectoryW( MAX_PATH, savedDllDir );
@@ -251,16 +266,133 @@ qboolean Remix_LoadAndInitialize( const char *custom_path )
 	{
 		DWORD err = GetLastError();
 		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: LoadLibrary failed for '%ls' (Win32 error: %lu)\n", dllPath, err );
+	}
+	return hDll;
+}
+#else
+static qboolean R_Remix_TryPath( const char *path, char *outPath, size_t maxLen )
+{
+	struct stat st;
+	if( stat( path, &st ) != 0 )
+		return false;
+
+	if( S_ISDIR( st.st_mode ) )
+	{
+		Q_snprintf( outPath, maxLen, "%s/libremix.so", path );
+		return stat( outPath, &st ) == 0 && !S_ISDIR( st.st_mode );
+	}
+
+	Q_strncpy( outPath, path, maxLen );
+	return true;
+}
+
+static qboolean R_Remix_FindLibraryPath( const char *customPath, char *outPath, size_t maxLen, char *outDir, size_t maxDirLen )
+{
+	// Register cvar if not registered yet
+	if( !r_remix_path && gEngfuncs.Cvar_Get )
+	{
+		r_remix_path = gEngfuncs.Cvar_Get( "r_remix_path", "", FCVAR_ARCHIVE, "Path to libremix.so or directory containing it" );
+	}
+
+	const char *openremixCvar = gEngfuncs.pfnGetCvarString ? gEngfuncs.pfnGetCvarString( "r_openremix_path" ) : NULL;
+	const char *envRemix = getenv( "REMIX_PATH" );
+	const char *explicitPaths[] = { customPath, r_remix_path ? r_remix_path->string : NULL, openremixCvar, envRemix };
+	qboolean found = false;
+
+	// Explicit paths first: the argument, r_remix_path, r_openremix_path, REMIX_PATH
+	for( size_t i = 0; i < ARRAYSIZE( explicitPaths ) && !found; i++ )
+	{
+		if( !explicitPaths[i] || !explicitPaths[i][0] )
+			continue;
+		found = R_Remix_TryPath( explicitPaths[i], outPath, maxLen );
+		if( !found && i > 0 )
+			gEngfuncs.Con_Printf( S_WARN "ref_openremix: '%s' not found, falling back...\n", explicitPaths[i] );
+	}
+
+	// Candidate relative and workspace paths
+	for( int i = 0; !found && g_candidatePaths[i] != NULL; i++ )
+		found = R_Remix_TryPath( g_candidatePaths[i], outPath, maxLen );
+
+	if( !found )
+	{
+		// Let the dynamic linker search LD_LIBRARY_PATH and the system directories
+		Q_strncpy( outPath, "libremix.so.0", maxLen );
+		outDir[0] = '\0';
+		return true;
+	}
+
+	char absPath[PATH_MAX];
+	if( realpath( outPath, absPath ) )
+		Q_strncpy( outPath, absPath, maxLen );
+
+	Q_strncpy( outDir, outPath, maxDirLen );
+	char *slash = strrchr( outDir, '/' );
+	if( slash )
+		*slash = '\0';
+
+	return true;
+}
+
+static remixapi_HMODULE R_Remix_OpenLibrary( const char *dllPath, const char *dllDir )
+{
+	(void)dllDir;
+
+	// libremix.so finds its own dependencies through its RUNPATH; libSDL3.so.0 must be the engine's,
+	// so both share one SDL instance and one window
+	void *hDll = dlopen( dllPath, RTLD_NOW | RTLD_LOCAL );
+	if( !hDll )
+		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: dlopen failed for '%s': %s\n", dllPath, dlerror( ));
+	return hDll;
+}
+
+qboolean R_ExeDirectory( char *out, size_t size )
+{
+	ssize_t len = readlink( "/proc/self/exe", out, size - 1 );
+	if( len <= 0 )
+		return false;
+	out[len] = '\0';
+
+	char *slash = strrchr( out, '/' );
+	if( !slash )
+		return false;
+	*slash = '\0';
+	return true;
+}
+#endif
+
+qboolean R_Remix_LoadLibrary( void )
+{
+	return Remix_LoadAndInitialize( NULL );
+}
+
+qboolean Remix_LoadAndInitialize( const char *custom_path )
+{
+	if( g_remixState.isLoaded )
+		return true;
+
+	rpathchar_t dllPath[MAX_PATH] = { 0 };
+	rpathchar_t dllDir[MAX_PATH] = { 0 };
+
+	if( !R_Remix_FindLibraryPath( custom_path, dllPath, MAX_PATH, dllDir, MAX_PATH ) )
+	{
+		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: Could not locate remix.dll!\n"
+		                      "Please set 'r_remix_path' or REMIX_PATH environment variable to remix.dll location.\n" );
 		return false;
 	}
 
+	gEngfuncs.Con_Printf( S_NOTE "ref_openremix: Found remix library at: " RPATH_FMT "\n", dllPath );
+
+	remixapi_HMODULE hDll = R_Remix_OpenLibrary( dllPath, dllDir );
+	if( !hDll )
+		return false;
+
 	// Resolve initialize entry point
 	PFN_remixapi_InitializeLibrary pfn_InitializeLibrary =
-		(PFN_remixapi_InitializeLibrary)GetProcAddress( hDll, "remixapi_InitializeLibrary" );
+		(PFN_remixapi_InitializeLibrary)R_Remix_Symbol( hDll, "remixapi_InitializeLibrary" );
 	if( !pfn_InitializeLibrary )
 	{
-		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: 'remixapi_InitializeLibrary' export not found in '%ls'!\n", dllPath );
-		FreeLibrary( hDll );
+		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: 'remixapi_InitializeLibrary' export not found in '" RPATH_FMT "'!\n", dllPath );
+		R_Remix_Close( hDll );
 		return false;
 	}
 
@@ -276,7 +408,7 @@ qboolean Remix_LoadAndInitialize( const char *custom_path )
 	{
 		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: remixapi_InitializeLibrary failed: %s (code %u)\n",
 		                      R_Remix_GetErrorString( status ), (unsigned)status );
-		FreeLibrary( hDll );
+		R_Remix_Close( hDll );
 		return false;
 	}
 
@@ -289,7 +421,7 @@ qboolean Remix_LoadAndInitialize( const char *custom_path )
 	    !iface.SubmitUIDrawList || !iface.SetConfigVariable )
 	{
 		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: remixapi_Interface missing mandatory function pointers!\n" );
-		FreeLibrary( hDll );
+		R_Remix_Close( hDll );
 		return false;
 	}
 
@@ -299,8 +431,8 @@ qboolean Remix_LoadAndInitialize( const char *custom_path )
 	g_remixState.isLoaded = true;
 	g_remixState.isStarted = false;
 	g_remixState.apiVersion = info.version;
-	wcsncpy( g_remixState.dllPath, dllPath, MAX_PATH );
-	wcsncpy( g_remixState.dllDir, dllDir, MAX_PATH );
+	R_Remix_PathCopy( g_remixState.dllPath, dllPath, MAX_PATH );
+	R_Remix_PathCopy( g_remixState.dllDir, dllDir, MAX_PATH );
 
 	gEngfuncs.Con_Printf( "^2ref_openremix: Successfully initialized Remix C API (v0.1003.0)^7\n" );
 	return true;
@@ -429,19 +561,125 @@ static LRESULT CALLBACK R_Remix_WindowProcHook( HWND hwnd, UINT uMsg, WPARAM wPa
 
 	return DefWindowProcW( hwnd, uMsg, wParam, lParam );
 }
+
+qboolean R_Remix_RouteInput( void ) { return true; }
 #else
+// The engine and OpenRemix read the same SDL3 event queue and the engine reads it first, so
+// an event filter stands in for the Win32 window procedure hook: F12 toggles the overlay, and
+// while it is open, input is held back from the engine and handed to OpenRemix instead
+#define MAX_HELD_EVENTS 512
+
+static qboolean  g_uiOpen = false;
+static qboolean  g_toggleRequested = false;
+static qboolean  g_reinjecting = false;
+static float     g_savedMouseIgnore = 0.0f;
+static SDL_Event g_heldEvents[MAX_HELD_EVENTS];
+static int       g_numHeldEvents = 0;
+
+static qboolean R_Remix_IsInputEvent( Uint32 type )
+{
+	return ( type >= SDL_EVENT_KEY_DOWN && type < SDL_EVENT_JOYSTICK_AXIS_MOTION ) ||
+	       ( type >= SDL_EVENT_FINGER_DOWN && type <= SDL_EVENT_FINGER_CANCELED );
+}
+
+static bool SDLCALL R_Remix_EventFilter( void *userdata, SDL_Event *event )
+{
+	(void)userdata;
+
+	if( g_reinjecting )
+		return true;
+
+	if(( event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP ) && event->key.scancode == SDL_SCANCODE_F12 )
+	{
+		if( event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat )
+			g_toggleRequested = true;
+		return false; // Consume the key so game does not take screenshot
+	}
+
+	if( g_uiOpen && R_Remix_IsInputEvent( event->type ))
+	{
+		if( g_numHeldEvents < MAX_HELD_EVENTS )
+			g_heldEvents[g_numHeldEvents++] = *event;
+
+		// releases still reach the engine, so nothing held before the overlay opened stays down
+		return event->type == SDL_EVENT_KEY_UP || event->type == SDL_EVENT_MOUSE_BUTTON_UP;
+	}
+
+	return true;
+}
+
+// The engine stops reading the mouse, releases it and shows the cursor while m_ignore is set
+static void R_Remix_SetUIOpen( qboolean open )
+{
+	if( open == g_uiOpen )
+		return;
+
+	g_uiOpen = open;
+	g_numHeldEvents = 0;
+
+	if( open )
+	{
+		g_savedMouseIgnore = gEngfuncs.pfnGetCvarFloat( "m_ignore" );
+		gEngfuncs.Cvar_SetValue( "m_ignore", 1.0f );
+	}
+	else
+	{
+		gEngfuncs.Cvar_SetValue( "m_ignore", g_savedMouseIgnore );
+	}
+}
+
 void R_Remix_UpdateCursorClipping( void ) {}
+
 void R_Remix_ToggleUI( void )
 {
 	if( !g_remix.GetUIState || !g_remix.SetUIState )
 		return;
 
 	remixapi_UIState cur = g_remix.GetUIState();
-	g_remix.SetUIState( cur == REMIXAPI_UI_STATE_NONE ? REMIXAPI_UI_STATE_ADVANCED : REMIXAPI_UI_STATE_NONE );
+	if( cur == REMIXAPI_UI_STATE_NONE )
+	{
+		g_remix.SetUIState( REMIXAPI_UI_STATE_ADVANCED );
+		R_Remix_SetUIOpen( true );
+		gEngfuncs.Con_Printf( "^2[OpenRemix]^7 Developer UI Opened (F12)\n" );
+	}
+	else
+	{
+		g_remix.SetUIState( REMIXAPI_UI_STATE_NONE );
+		R_Remix_SetUIOpen( false );
+		gEngfuncs.Con_Printf( "^2[OpenRemix]^7 Developer UI Closed (F12)\n" );
+	}
 }
+
 static void R_Remix_ToggleUI_Cmd( void )
 {
 	R_Remix_ToggleUI();
+}
+
+// Before OpenRemix pumps events: apply F12, follow the overlay closing itself, and put the
+// input held back from the engine into the queue for OpenRemix. OpenRemix's pump takes every
+// event off the shared queue, so it only runs while the overlay is open: otherwise the engine
+// loses key releases (keys stick) and text to it
+qboolean R_Remix_RouteInput( void )
+{
+	if( !g_remixState.isStarted )
+		return false;
+
+	if( g_toggleRequested )
+	{
+		g_toggleRequested = false;
+		R_Remix_ToggleUI();
+	}
+
+	if( g_remix.GetUIState )
+		R_Remix_SetUIOpen( g_remix.GetUIState() != REMIXAPI_UI_STATE_NONE );
+
+	g_reinjecting = true;
+	for( int i = 0; i < g_numHeldEvents; i++ )
+		SDL_PushEvent( &g_heldEvents[i] );
+	g_reinjecting = false;
+	g_numHeldEvents = 0;
+
+	return g_uiOpen;
 }
 #endif
 
@@ -456,17 +694,25 @@ qboolean R_Remix_Startup( void *hwnd )
 	if( g_remixState.isStarted )
 		return true;
 
+	remixapi_StartupInfo startupInfo = { 0 };
+	startupInfo.sType = REMIXAPI_STRUCT_TYPE_STARTUP_INFO;
+#if defined(_WIN32)
 	if( !hwnd )
 	{
 		gEngfuncs.Con_Printf( S_ERROR "ref_openremix: Cannot startup Remix - NULL HWND provided!\n" );
 		return false;
 	}
 
-	remixapi_StartupInfo startupInfo = { 0 };
-	startupInfo.sType = REMIXAPI_STRUCT_TYPE_STARTUP_INFO;
 	startupInfo.hwnd = (remixapi_HWND)hwnd;
-	startupInfo.disableSrgbConversionForOutput = 0;
 	startupInfo.forceNoVkSwapchain = 0;
+#else
+	// OpenRemix opens its own SDL3 window here; the engine takes it over in R_Init_Video
+	(void)hwnd;
+	startupInfo.windowTitle  = "Xash3D FWGS";
+	startupInfo.windowWidth  = (uint32_t)Q_max( 0.0f, gEngfuncs.pfnGetCvarFloat( "width" ));
+	startupInfo.windowHeight = (uint32_t)Q_max( 0.0f, gEngfuncs.pfnGetCvarFloat( "height" ));
+#endif
+	startupInfo.disableSrgbConversionForOutput = 0;
 	startupInfo.editorModeEnabled = 0;
 	startupInfo.combineGuiInFinalColor = 1;
 
@@ -500,6 +746,9 @@ qboolean R_Remix_Startup( void *hwnd )
 	}
 
 	g_remixState.isStarted = true;
+#if !defined(_WIN32)
+	SDL_SetEventFilter( R_Remix_EventFilter, NULL );
+#endif
 	gEngfuncs.Con_Printf( S_NOTE "ref_openremix: OpenRemix renderer started on HWND 0x%p\n", hwnd );
 	return true;
 }
@@ -510,6 +759,14 @@ void R_Remix_Shutdown( void )
 	{
 		gEngfuncs.Cmd_RemoveCommand( "openremix_menu" );
 	}
+
+#if !defined(_WIN32)
+	if( g_remixState.isStarted )
+	{
+		SDL_SetEventFilter( NULL, NULL );
+		R_Remix_SetUIOpen( false );
+	}
+#endif
 
 #if defined(_WIN32)
 	ClipCursor( NULL );
@@ -543,7 +800,7 @@ void R_Remix_UnloadLibrary( void )
 
 	if( g_remixState.hRemixDll )
 	{
-		FreeLibrary( g_remixState.hRemixDll );
+		R_Remix_Close( g_remixState.hRemixDll );
 		g_remixState.hRemixDll = NULL;
 	}
 

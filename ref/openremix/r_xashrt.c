@@ -50,6 +50,14 @@ static FILE *R_XRT_Open( const char *path )
 			f = fopen( full, "rb" );
 		}
 	}
+#else
+	char full[MAX_PATH];
+	if( !f && R_ExeDirectory( full, sizeof( full ) ) && Q_strlen( full ) + 2 + Q_strlen( path ) < sizeof( full ) )
+	{
+		Q_strncat( full, "/", sizeof( full ) );
+		Q_strncat( full, path, sizeof( full ) );
+		f = fopen( full, "rb" );
+	}
 #endif
 	return f;
 }
@@ -532,7 +540,7 @@ static qboolean R_XRT_CreateKtx( const char *path, uint64_t hash, remixapi_Textu
 	return ok;
 }
 
-qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, wchar_t *out, size_t outLen )
+qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, rpathchar_t *out, size_t outLen )
 {
 	if( !texname )
 		return false;
@@ -551,7 +559,7 @@ qboolean R_XRT_GetReplacementTexture( const char *texname, const char *suffix, w
 	return R_XRT_GetFileTexture( path, out, outLen );
 }
 
-qboolean R_XRT_GetFileTexture( const char *path, wchar_t *out, size_t outLen )
+qboolean R_XRT_GetFileTexture( const char *path, rpathchar_t *out, size_t outLen )
 {
 	if( !rt_xrt || rt_xrt->value <= 0.0f || !path || !g_remix.CreateTexture )
 		return false;
@@ -598,7 +606,7 @@ qboolean R_XRT_GetFileTexture( const char *path, wchar_t *out, size_t outLen )
 	if( !slot->valid )
 		return false;
 
-	_snwprintf( out, outLen, L"0x%llx", (unsigned long long)hash );
+	R_PathPrintf( out, outLen, RPATH( "0x%llx" ), (unsigned long long)hash );
 	return true;
 }
 
@@ -715,7 +723,7 @@ static uint32_t *R_XRT_ReadIndices( int accessorIndex, int *outCount )
 }
 
 // Image for a glTF texture index: a file next to the .gltf, or (mat_junction) an engine texture
-static qboolean R_XRT_SceneImage( int textureIndex, wchar_t *out, size_t outLen )
+static qboolean R_XRT_SceneImage( int textureIndex, rpathchar_t *out, size_t outLen )
 {
 	const jval_t *tex = J_At( J_Get( s_scene.gltf, "textures" ), textureIndex );
 	const jval_t *img = J_At( J_Get( s_scene.gltf, "images" ), J_Int( J_Get( tex, "source" ), -1 ) );
@@ -753,7 +761,7 @@ static qboolean R_XRT_SceneImage( int textureIndex, wchar_t *out, size_t outLen 
 			R_XRT_TextureKey( g_remixTextures[i].name, other, sizeof( other ) );
 			if( !Q_stricmp( other, key ) )
 			{
-				_snwprintf( out, outLen, L"0x%llx", (unsigned long long)g_remixTextures[i].texHash );
+				R_PathPrintf( out, outLen, RPATH( "0x%llx" ), (unsigned long long)g_remixTextures[i].texHash );
 				return true;
 			}
 		}
@@ -793,7 +801,7 @@ static qboolean R_XRT_SceneImage( int textureIndex, wchar_t *out, size_t outLen 
 		if( g_remix.CreateTexture( &info, &s_scene.textures[s_scene.numTextures] ) == REMIXAPI_ERROR_CODE_SUCCESS )
 		{
 			s_scene.numTextures++;
-			_snwprintf( out, outLen, L"0x%llx", (unsigned long long)hash );
+			R_PathPrintf( out, outLen, RPATH( "0x%llx" ), (unsigned long long)hash );
 			ok = true;
 		}
 	}
@@ -820,7 +828,7 @@ static remixapi_MaterialHandle R_XRT_SceneMaterial( int index )
 	const jval_t *color = J_Get( pbr, "baseColorFactor" );
 	const jval_t *emis = J_Get( m, "emissiveFactor" );
 
-	wchar_t albedo[32] = { 0 };
+	rpathchar_t albedo[32] = { 0 };
 	qboolean hasAlbedo = R_XRT_SceneImage( J_Int( J_Get( J_Get( pbr, "baseColorTexture" ), "index" ), -1 ), albedo, ARRAYSIZE( albedo ) );
 
 	remixapi_MaterialInfoOpaqueEXT opaque;

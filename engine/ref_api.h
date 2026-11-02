@@ -252,6 +252,7 @@ typedef enum ref_graphic_apis_e
 	REF_SOFTWARE,	// hypothetical: just make a surface to draw on, in software
 	REF_GL,		// create GL context
 	REF_D3D,	// Direct3D
+	REF_EXTERNAL_WINDOW, // the renderer created an SDL3 window itself, the engine takes it over
 } ref_graphic_apis_t;
 
 typedef enum

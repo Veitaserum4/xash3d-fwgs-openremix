@@ -30,7 +30,7 @@ qboolean R_AutoPBR_Classify( const char *baseName, qboolean studio, float *metal
 // Tangent-space (OpenGL) normal map from the image's brightness as height, at rt_autopbr_normals
 // strength; uploaded as `hash`, its texture path written to `path`. False when off or failed
 qboolean R_AutoPBR_CreateNormalMap( const byte *rgba, uint32_t width, uint32_t height, uint64_t hash,
-                                    remixapi_TextureHandle *handle, wchar_t *path, size_t pathLen );
+                                    remixapi_TextureHandle *handle, rpathchar_t *path, size_t pathLen );
 
 #ifdef __cplusplus
 }
